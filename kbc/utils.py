@@ -1,4 +1,4 @@
-import os
+import os, sys
 import os.path as osp
 import json
 import time
@@ -130,9 +130,9 @@ def check_gpu():
     d["mem_used_per"] = d["mem_used"] * 100 / 11171
 
     if d["gpu_util"] < 15 and d["mem_used"] < 2816 :
-    	msg = 'GPU status: Idle \n'
+        msg = 'GPU status: Idle \n'
     else:
-    	msg = 'GPU status: Busy \n'
+        msg = 'GPU status: Busy \n'
 
     now = time.strftime("%c")
     return ('\nUpdated at %s\nGPU utilization: %s %%\nVRAM used: %s %%\n%s\n' % (now, d["gpu_util"],d["mem_used_per"], msg))
@@ -153,7 +153,7 @@ class QuerDAG(enum.Enum):
 
 class DynKBCSingleton:
     __instance = None
-
+    # Singleton pattern to ensure that only one instance of the class is created
     @staticmethod
     def getInstance():
         """ Static access method. """
@@ -226,18 +226,20 @@ def get_keys_and_targets(parts, targets, graph_type):
     elif len(parts) == 3:
         part1, part2, part3 = parts
 
+    # "keys" are the unique chain queries we want to answer in a str format(e.g., (21,2,4)_(5,6,8))
+    # target_ids is a dict that maps these keys to the target id of the chain query
     target_ids = {}
     keys = []
 
     for chain_iter in range(len(part1)):
-
+        # parts of the chain are concatenated to form a key
         if len(parts) == 3:
             key = part1[chain_iter] + part2[chain_iter] + part3[chain_iter]
         elif len(parts) == 2:
             key = part1[chain_iter] + part2[chain_iter]
         else:
             key = part1[chain_iter]
-
+        # then joins the key elements with underscores to create a string.
         key = '_'.join(str(e) for e in key)
 
         if key not in target_ids:
@@ -248,6 +250,7 @@ def get_keys_and_targets(parts, targets, graph_type):
 
     return target_ids, keys
 
+# takes each part of the chains and gets embeddings for each part
 
 def preload_env(kbc_path, dataset, graph_type, mode="hard", kg_path=None,
                 explain=False):
@@ -255,6 +258,7 @@ def preload_env(kbc_path, dataset, graph_type, mode="hard", kg_path=None,
     from kbc.learn import kbc_model_load
 
     env = DynKBCSingleton.getInstance()
+
 
     chain_instructions = []
     try:
@@ -270,6 +274,7 @@ def preload_env(kbc_path, dataset, graph_type, mode="hard", kg_path=None,
 
         keys = []
         target_ids = {}
+        # sees which type of query we are dealing with
         if QuerDAG.TYPE1_1.value == graph_type:
 
             raw = dataset.type1_1chain
@@ -312,11 +317,11 @@ def preload_env(kbc_path, dataset, graph_type, mode="hard", kg_path=None,
         elif QuerDAG.TYPE1_2.value == graph_type:
 
             raw = dataset.type1_2chain
-
+            # a list of all type1_2chains (only their data)
             type1_2chain = []
             for i in range(len(raw)):
                 type1_2chain.append(raw[i].data)
-
+            # type 1_2 chain has two parts. it separates them
             part1 = [x['raw_chain'][0] for x in type1_2chain]
             part2 = [x['raw_chain'][1] for x in type1_2chain]
 
@@ -327,14 +332,18 @@ def preload_env(kbc_path, dataset, graph_type, mode="hard", kg_path=None,
 
             targets = []
             for chain_iter in range(len(part2)):
+                # masks the target node (tail of the second part of the chain) with some code so that it is not used in the embedding
+                # but part 1 remains the same
                 flattened_part2.append([part2[chain_iter][0],part2[chain_iter][1],-(chain_iter+1234)])
                 flattened_part1.append(part1[chain_iter])
+                # that target node is added to the targets list
                 targets.append(part2[chain_iter][2])
 
             part1 = flattened_part1
             part2 = flattened_part2
             targets = targets
-
+            # "keys" are the unique chain queries we want to answer in a str format(e.g., (21,2,4)_(5,6,8))
+            # target_ids is a dict that maps these keys to the target id of the chain query
             target_ids, keys = get_keys_and_targets([part1, part2], targets, graph_type)
 
             if not chain_instructions:
@@ -347,8 +356,9 @@ def preload_env(kbc_path, dataset, graph_type, mode="hard", kg_path=None,
 
             part2 = np.array(part2)
             part2 = torch.tensor(part2.astype('int64'), device=device)
-
+            # gets the embeddings for part 1s of the chain
             chain1 = kbc.model.get_full_embeddigns(part1)
+            # gets the embeddings for part 2s of the chain (remember that the target node is masked)
             chain2 = kbc.model.get_full_embeddigns(part2)
 
             lhs_norm = 0.0

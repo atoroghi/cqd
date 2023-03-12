@@ -2,7 +2,7 @@ from kbc.datasets import Dataset
 import itertools
 import argparse
 import pickle
-import os
+import os,sys
 
 
 from tqdm import tqdm as tqdm
@@ -10,6 +10,8 @@ from tqdm import tqdm as tqdm
 
 class Chain():
     def __init__(self):
+        # anchors are the anchor entities that are not optimisable
+        # optimisable should be entities in between and the target entity
         self.data = {'raw_chain':[], 'anchors': [], 'optimisable': [], 'type':None}
 
 class ChaineDataset():
@@ -20,11 +22,14 @@ class ChaineDataset():
             self.threshold = threshold
 
             self.raw_data = dataset
+            #rhs_missing is a dictionary with keys being tuples of (entity, relation) and values being the list of tails of that entity-relation pair in the test set
             self.rhs_missing = self.raw_data.to_skip['rhs']
             self.lhs_missing = self.raw_data.to_skip['lhs']
 
+            # merges the lhs and rhs missing into one dictionary
             self.full_missing = {**self.rhs_missing, **self.lhs_missing}
 
+            # reforms the test triples into a set of tuples
             self.test_set = set((tuple(triple) for triple in self.raw_data.data['test']))
 
         self.neighbour_relations = {}
@@ -59,7 +64,7 @@ class ChaineDataset():
         except RuntimeError as e:
             print(e)
 
-
+# not sure but seems like this function gets relations that are connected to each entity in the test set and stores them in a list
     def __get_neighbour_relations__(self):
         try:
 
@@ -77,7 +82,7 @@ class ChaineDataset():
 
         except Exception as e:
             print(1)
-
+# reverses keys and values in the rhs_missing dictionary
     def __reverse_maps__(self):
 
         for keys,vals in self.rhs_missing.items():
@@ -87,32 +92,36 @@ class ChaineDataset():
 
                 self.reverse_maps[val].append(keys)
 
-
+    # This must be 2p
     def __type1_2chains__(self):
 
         try:
+            # taking each triple in the test set e.g., (13, 1, 51)
             for test_triple in tqdm(self.raw_data.data['test']):
-
+                # head and relation: test_lhs_chain_1 (the first part of the chain)
                 test_lhs_chain_1 = (test_triple[0], test_triple[1])
+                # tail is added to answers
                 test_answers_chain_1 = [test_triple[2]]
-
+                # neighbour relations of the tail (answer) are the potential continuations of the chain
                 potential_chain_cont = [(x, self.neighbour_relations[x]) for x in test_answers_chain_1]
-
+                
+                # potential is a tuple of the answer and the neighbour relations of each answer
                 for potential in potential_chain_cont:
-
+                    # x is each neighbour relation
+                    # segmented_list is a list of tuples of the answer and each neighbour relation
                     segmented_list = [(potential[0],x) for x in potential[1]]
 
                     continuations = [ [x,self.rhs_missing[x]] for x in  segmented_list if x in self.rhs_missing]
 
                     ans_1 = [potential[0]]
 
-
+                    # raw_chains includes both parts of the chain. the first part is the original triple and the second part is the continuation of the chain
                     raw_chains = [
                         [ list(test_lhs_chain_1) +  ans_1,  [x[0][0], x[0][1], x[1]] ]
 
                         for x in continuations
                     ]
-
+                    # storing raw_chains in a list of Chain objects and updating its attributes
                     for chain in raw_chains:
                         new_chain = Chain()
                         new_chain.data['type'] = '1chain2'
@@ -137,7 +146,7 @@ class ChaineDataset():
         except RuntimeError as e:
             print(e)
 
-
+    # this is 2i
     def __type2_2chains__(self):
         try:
 
@@ -186,7 +195,7 @@ class ChaineDataset():
         except RuntimeError as e:
             print(e)
 
-
+# this is 3p
     def __type1_3chains__(self):
         try:
             #Appending routine
@@ -230,7 +239,9 @@ class ChaineDataset():
 
                         new_chain.data['optimisable'].append(chain[0][2])
                         new_chain.data['optimisable'].append(chain[1][2])
-                        new_chain.data['optimisable'].append(chain[1][2])
+                        # IMPORTANT: this must be chain[2][2] and not chain[1][2]
+                        #new_chain.data['optimisable'].append(chain[1][2])
+                        new_chain.data['optimisable'].append(chain[2][2])
 
 
                         self.type1_3chain.append(new_chain)
@@ -248,7 +259,7 @@ class ChaineDataset():
         except RuntimeError as e:
             print(e)
 
-
+# this is 3i
     def __type2_3chains__(self):
         try:
             for ans in tqdm(self.reverse_maps):
@@ -305,7 +316,7 @@ class ChaineDataset():
 
         except RuntimeError as e:
             print(e)
-
+# this is pi
     def __type3_3chains__(self):
 
         try:
@@ -386,7 +397,7 @@ class ChaineDataset():
         except RuntimeError as e:
             print(e)
 
-
+# this is ip
     def __type4_3chains__(self):
         try:
             for chain in tqdm(self.type2_2chain):
@@ -465,7 +476,7 @@ def load_chain_data(data_path):
 
 if __name__ == "__main__":
 
-    big_datasets = ['Bio','FB15K', 'WN', 'WN18RR', 'FB237', 'YAGO3-10']
+    big_datasets = ['Bio','FB15k', 'WN', 'WN18RR', 'FB237', 'YAGO3-10']
     datasets = big_datasets
 
     parser = argparse.ArgumentParser(
@@ -490,7 +501,7 @@ if __name__ == "__main__":
 
     args = parser.parse_args()
 
-    chained_dataset_sampler = ChaineDataset( Dataset(args.dataset),args.threshold)
+    chained_dataset_sampler = ChaineDataset( Dataset(os.path.join('data',args.dataset)),args.threshold)
     chained_dataset_sampler.sample_chains()
 
     save_chain_data(args.save_path,args.dataset,chained_dataset_sampler)

@@ -26,9 +26,12 @@ class KBCOptimizer(object):
         self.batch_size = batch_size
         self.verbose = verbose
 
+# the main function that trains the KBF model for an epoch
     def train_epoch(self, examples: torch.LongTensor):
-
+        # shuffle the examples
         actual_examples = examples[torch.randperm(examples.shape[0]), :]
+
+        # TODO: remember to adjust the loss function according to the model
         loss = nn.CrossEntropyLoss(reduction='mean')
         with tqdm.tqdm(total=examples.shape[0], unit='ex', disable=not self.verbose) as bar:
             bar.set_description(f'train loss')

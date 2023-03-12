@@ -44,10 +44,11 @@ def train_kbc(KBC_optimizer, dataset, args):
 
 	timestamp = str(int(time.time()))
 	for epoch in range(1, max_epochs + 1):
-
+        # does train_epoch return the loss?
 		cur_loss = KBC_optimizer.train_epoch(examples)
 
 		if (epoch + 1) % args.valid == 0:
+            
 			valid, test, train = [
 				avg_both(*dataset.eval(KBC_optimizer.model, split, -1 if split != 'train' else 50000))
 				for split in ['valid', 'test', 'train']
@@ -266,6 +267,7 @@ if __name__ == "__main__":
 	args.data_shape = dataset.get_shape()
 
 	if not args.eval_only:
+        # creating an instance of the KGE model
 		model = {
 			'CP': lambda: CP(dataset.get_shape(), args.rank, args.init),
 			'ComplEx': lambda: ComplEx(dataset.get_shape(), args.rank, args.init),

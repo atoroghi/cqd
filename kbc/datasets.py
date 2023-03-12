@@ -18,6 +18,8 @@ class Dataset(object):
         self.root = Path(path)
 
         self.data = {}
+
+        #loads train, test, and valid txt files from data/datasetname/kbc_data
         for f in ['train', 'test', 'valid']:
             in_file = open(str(self.root / (f + '.txt.pickle')), 'rb')
             self.data[f] = pickle.load(in_file)
@@ -28,6 +30,7 @@ class Dataset(object):
             self.n_predicates = len(pickle.load(f))
 
         inp_f = open(str(self.root / f'to_skip.pickle'), 'rb')
+        #self.to_skip keys are "lhs" and "rhs"
         self.to_skip: Dict[str, Dict[Tuple[int, int], List[int]]] = pickle.load(inp_f)
         inp_f.close()
 
@@ -38,22 +41,29 @@ class Dataset(object):
         return self.data['train']
 
     def eval(self, model: KBCModel, split: str, n_queries: int = -1, missing_eval: str = 'both',at: Tuple[int] = (1, 3, 10)):
-
+        
+        #gets the split of interest from the dataset
         test = self.get_examples(split)
         examples = torch.from_numpy(test.astype('int64')).cuda()
+        # whether we want to evaluate missing lhs or rhs or both
         missing = [missing_eval]
+        #missing eval is 'both' by default
         if missing_eval == 'both':
             missing = ['rhs', 'lhs']
 
         mean_reciprocal_rank = {}
         hits_at = {}
 
+        # if we're dealing with the rhs missing, we keep the examples as they are, otherwise we swap the first and second column
+        # next, for the lhs missing, we increase even relations by 1 and odd relations by -1
         for m in missing:
             q = examples.clone()
+            # this happens only for train split
             if n_queries > 0:
                 permutation = torch.randperm(len(examples))[:n_queries]
                 q = examples[permutation]
             if m == 'lhs':
+                # swap the first and second column
                 tmp = torch.clone(q[:, 0])
                 q[:, 0] = q[:, 2]
                 q[:, 2] = tmp
@@ -69,6 +79,8 @@ class Dataset(object):
                 # Instead of:
                 # q[:, 1] += self.n_predicates // 2
 
+            # get the ranks of the correct answers (while skipping the to_skip) and compute the mean reciprocal rank and hits@k
+
             ranks = model.get_ranking(q, self.to_skip[m], batch_size=500)
             mean_reciprocal_rank[m] = torch.mean(1. / ranks).item()
             hits_at[m] = torch.FloatTensor((list(map(lambda x: torch.mean((ranks <= x).float()).item(),at))))
@@ -78,8 +90,10 @@ class Dataset(object):
     def get_shape(self):
         return self.n_entities, self.n_predicates, self.n_entities
 
+# returns the specificed split of the dataset. just if the split is train, it returns a permuted subset of the data
     def dataset_to_queries(self,split: str):
         try:
+            # getting the data for that split from the dataset
             test = self.get_examples(split)
             examples = torch.from_numpy(test.astype('int64')).cuda()
             missing = ['rhs']
