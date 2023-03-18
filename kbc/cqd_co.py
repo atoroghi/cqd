@@ -115,7 +115,7 @@ if __name__ == "__main__":
     modes = ['valid', 'test', 'train']
     chain_types = [t.value for t in QuerDAG]
 
-    t_norms = ['min', 'product']
+    t_norms = ['min', 'prod']
 
     parser = argparse.ArgumentParser(description="Complex Query Decomposition - Continuous Optimisation")
     parser.add_argument('path', help='Path to directory containing queries')

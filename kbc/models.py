@@ -778,7 +778,161 @@ class KBCModel(nn.Module, ABC):
 
         # res has the score of each entity for each query
         return res
+class SimplE(KBCModel):
+    def __init__(
+        self, sizes: Tuple[int, int, int], rank: int,
+        init_size: float = 1e-3
+        ):
+        super(SimplE).__init__()
+        self.sizes = sizes
+        self.rank = rank
 
+        self.embeddings = nn.ModuleList([
+            nn.Embedding(s, 2 * rank, sparse=True)
+            for s in sizes[:2]
+        ])
+        self.embeddings[0].weight.data *= init_size
+        self.embeddings[1].weight.data *= init_size
+
+        self.init_size = init_size
+
+    def score(self, x):
+        lhs = self.embeddings[0](x[:, 0])
+        rel = self.embeddings[1](x[:, 1])
+        rhs = self.embeddings[0](x[:, 2])
+        lhs = lhs[:, :self.rank], lhs[:, self.rank:]
+        rel = rel[:, :self.rank], rel[:, self.rank:]
+        rhs = rhs[:, :self.rank], rhs[:, self.rank:]
+        for_prod = torch.sum(lhs[0] * rel[0] * rhs[1], 1, keepdim=True)
+        inv_prod = torch.sum(lhs[1] * rel[1] * rhs[0], 1, keepdim=True)
+        return torch.clamp((for_prod + inv_prod)/2, min=-20, max=20)
+
+    def entity_embeddings(self, indices: Tensor):
+        return self.embeddings[0](indices)
+
+    def score_fixed(self, rel: Tensor, arg1: Tensor, arg2: Tensor,
+                    *args, **kwargs) -> Tensor:
+        rel_f, rel_inv = rel[:, :self.rank], rel[:, self.rank:]
+        arg1_f, arg1_inv = arg1[:, :self.rank], arg1[:, self.rank:]
+        arg2_f, arg2_inv = arg2[:, :self.rank], arg2[:, self.rank:]
+
+        score_f = torch.sum(arg1_f * rel_f * arg2_inv, 1, keepdim=True)
+        score_inv = torch.sum(arg1_inv * rel_inv * arg2_f, 1, keepdim=True)
+        res = torch.clamp((score_f + score_inv)/2, min=-20, max=20)
+        del rel_f, rel_inv, arg1_f, arg1_inv, arg2_f, arg2_inv, score_f, score_inv
+        return res
+
+
+# TODO: Check if this is correct
+    def candidates_score(self,
+                    rel: Tensor,
+                arg1: Optional[Tensor],
+                arg2: Optional[Tensor],
+                *args, **kwargs) -> Tuple[Optional[Tensor], Optional[Tensor]]:
+        emb = self.embeddings[0].weight
+        rel_f, rel_inv = rel[:, :self.rank], rel[:, self.rank:]
+        emb_f, emb_inv = emb[:, :self.rank], emb[:, self.rank:]
+
+        score_sp = score_po = None
+        if arg1 is not None:
+            arg1_f, arg1_inv = arg1[:, :self.rank], arg1[:, self.rank:]
+            score_f_sp = (rel_f * arg1_inv) @ emb_f.t()
+            score_inv_sp = (rel_inv * arg1_f) @ emb_inv.t()
+            score_sp = torch.clamp((score_f_sp + score_inv_sp)/2, min=-20, max=20)
+        if arg2 is not None:
+            arg2_f, arg2_inv = arg2[:, :self.rank], arg2[:, self.rank:]
+            score_f_po = (rel_f * arg2_f) @ emb_inv.t()
+            score_inv_po = (rel_inv * arg2_inv) @ emb_f.t()
+            score_po = torch.clamp((score_f_po + score_inv_po)/2, min=-20, max=20)
+        return score_sp, score_po
+
+    def score_emb(self, lhs_emb: torch.Tensor, rel_emb: torch.Tensor, rhs_emb: torch.Tensor):
+        lhs = lhs_emb[:, :self.rank], lhs_emb[:, self.rank:]
+        rel = rel_emb[:, :self.rank], rel_emb[:, self.rank:]
+        rhs = rhs_emb[:, :self.rank], rhs_emb[:, self.rank:]
+        for_prod = torch.sum(lhs[0] * rel[0] * rhs[1], 1, keepdim=True)
+        inv_prod = torch.sum(lhs[1] * rel[1] * rhs[0], 1, keepdim=True)
+        score = torch.clamp((for_prod + inv_prod)/2, min=-20, max=20)
+
+        return score, (
+            torch.sqrt(lhs[0] ** 2 + lhs[1] ** 2),
+            torch.sqrt(rel[0] ** 2 + rel[1] ** 2),
+            torch.sqrt(rhs[0] ** 2 + rhs[1] ** 2)
+        )
+        
+    def forward(self, x):
+        lhs = self.embeddings[0](x[:, 0])
+        rel = self.embeddings[1](x[:, 1])
+        rhs = self.embeddings[0](x[:, 2])
+
+        lhs = lhs[:, :self.rank], lhs[:, self.rank:]
+        rel = rel[:, :self.rank], rel[:, self.rank:]
+        rhs = rhs[:, :self.rank], rhs[:, self.rank:]
+        to_score = self.embeddings[0].weight
+        to_score = to_score[:, :self.rank], to_score[:, self.rank:]
+        for_prod = (lhs[0] * rel[0]) @ to_score[1].transpose(0, 1)
+        inv_prod = (lhs[1] * rel[1]) @ to_score[0].transpose(0, 1)
+        return torch.clamp((for_prod + inv_prod)/2, min=-20, max=20), (
+            torch.sqrt(lhs[0] ** 2 + lhs[1] ** 2),
+            torch.sqrt(rel[0] ** 2 + rel[1] ** 2),
+            torch.sqrt(rhs[0] ** 2 + rhs[1] ** 2)
+        )
+
+    def forward_emb(self, lhs, rel):
+        lhs = lhs[:, :self.rank], lhs[:, self.rank:]
+        rel = rel[:, :self.rank], rel[:, self.rank:]
+
+        to_score = self.embeddings[0].weight
+        to_score = to_score[:, :self.rank], to_score[:, self.rank:]
+        for_prod = (lhs[0] * rel[0]) @ to_score[1].transpose(0, 1)
+        inv_prod = (lhs[1] * rel[1]) @ to_score[0].transpose(0, 1)
+        return torch.clamp((for_prod + inv_prod)/2, min=-20, max=20)
+
+
+    def get_rhs(self, chunk_begin: int, chunk_size: int):
+        return self.embeddings[0].weight.data[
+            chunk_begin:chunk_begin + chunk_size
+        ].transpose(0, 1)
+
+    def get_queries_separated(self, queries: torch.Tensor):
+        lhs = self.embeddings[0](queries[:, 0])
+        rel = self.embeddings[1](queries[:, 1])
+
+        return (lhs, rel)
+
+    def get_full_embeddigns(self, queries: torch.Tensor):
+
+        if torch.sum(queries[:, 0]).item() > 0:
+            lhs = self.embeddings[0](queries[:, 0])
+        else:
+            lhs = None
+
+        if torch.sum(queries[:, 1]).item() > 0:
+
+            rel = self.embeddings[1](queries[:, 1])
+        else:
+            rel = None
+
+        if torch.sum(queries[:, 2]).item() > 0:
+            rhs = self.embeddings[0](queries[:, 2])
+        else:
+            rhs = None
+
+        return (lhs,rel,rhs)
+
+    def get_queries(self, queries: torch.Tensor):
+        lhs = self.embeddings[0](queries[:, 0])
+        rel = self.embeddings[1](queries[:, 1])
+        lhs = lhs[:, :self.rank], lhs[:, self.rank:]
+        rel = rel[:, :self.rank], rel[:, self.rank:]
+
+        return torch.cat([
+            lhs[0] * rel[0],
+            lhs[1] * rel[1]
+        ], 1)
+
+    def model_type(self):
+        return "SimplE"
 
 class CP(KBCModel):
     def __init__(
