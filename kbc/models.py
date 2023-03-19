@@ -783,7 +783,7 @@ class SimplE(KBCModel):
         self, sizes: Tuple[int, int, int], rank: int,
         init_size: float = 1e-3
         ):
-        super(SimplE).__init__()
+        super(SimplE, self).__init__()
         self.sizes = sizes
         self.rank = rank
 
@@ -834,19 +834,22 @@ class SimplE(KBCModel):
         emb_f, emb_inv = emb[:, :self.rank], emb[:, self.rank:]
 
         score_sp = score_po = None
+        # calculates score of <arg1, rel, ent> triples for all entities
         if arg1 is not None:
             arg1_f, arg1_inv = arg1[:, :self.rank], arg1[:, self.rank:]
-            score_f_sp = (rel_f * arg1_inv) @ emb_f.t()
-            score_inv_sp = (rel_inv * arg1_f) @ emb_inv.t()
+            score_f_sp = (rel_f * arg1_f) @ emb_inv.t()
+            score_inv_sp = (rel_inv * arg1_inv) @ emb_f.t()
             score_sp = torch.clamp((score_f_sp + score_inv_sp)/2, min=-20, max=20)
+        # calculates scores of <ent, rel, arg2> triples for all entities
         if arg2 is not None:
             arg2_f, arg2_inv = arg2[:, :self.rank], arg2[:, self.rank:]
             score_f_po = (rel_f * arg2_f) @ emb_inv.t()
             score_inv_po = (rel_inv * arg2_inv) @ emb_f.t()
             score_po = torch.clamp((score_f_po + score_inv_po)/2, min=-20, max=20)
-        return score_sp, score_po
 
-    def score_emb(self, lhs_emb: torch.Tensor, rel_emb: torch.Tensor, rhs_emb: torch.Tensor):
+        return score_sp, score_po
+# returns the score of the given triples and regularization losses for head, rel, and tail
+    def score_emb(self, lhs_emb, rel_emb, rhs_emb):
         lhs = lhs_emb[:, :self.rank], lhs_emb[:, self.rank:]
         rel = rel_emb[:, :self.rank], rel_emb[:, self.rank:]
         rhs = rhs_emb[:, :self.rank], rhs_emb[:, self.rank:]
@@ -870,6 +873,7 @@ class SimplE(KBCModel):
         rhs = rhs[:, :self.rank], rhs[:, self.rank:]
         to_score = self.embeddings[0].weight
         to_score = to_score[:, :self.rank], to_score[:, self.rank:]
+        # to_score is all entities in tail
         for_prod = (lhs[0] * rel[0]) @ to_score[1].transpose(0, 1)
         inv_prod = (lhs[1] * rel[1]) @ to_score[0].transpose(0, 1)
         return torch.clamp((for_prod + inv_prod)/2, min=-20, max=20), (
@@ -884,6 +888,7 @@ class SimplE(KBCModel):
 
         to_score = self.embeddings[0].weight
         to_score = to_score[:, :self.rank], to_score[:, self.rank:]
+        # to_score is all entities in tail
         for_prod = (lhs[0] * rel[0]) @ to_score[1].transpose(0, 1)
         inv_prod = (lhs[1] * rel[1]) @ to_score[0].transpose(0, 1)
         return torch.clamp((for_prod + inv_prod)/2, min=-20, max=20)
@@ -927,8 +932,8 @@ class SimplE(KBCModel):
         rel = rel[:, :self.rank], rel[:, self.rank:]
 
         return torch.cat([
-            lhs[0] * rel[0],
-            lhs[1] * rel[1]
+            0.5 * lhs[1] * rel[1],
+            0.5 * lhs[0] * rel[0]
         ], 1)
 
     def model_type(self):

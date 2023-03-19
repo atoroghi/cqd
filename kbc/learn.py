@@ -16,7 +16,7 @@ import torch
 from torch import optim
 
 from kbc.datasets import Dataset
-from kbc.models import CP, ComplEx, DistMult
+from kbc.models import CP, ComplEx, DistMult, SimplE
 from kbc.regularizers import N2, N3
 from kbc.optimizers import KBCOptimizer
 
@@ -120,13 +120,15 @@ def kbc_model_load(model_path):
 	checkpoint = torch.load(model_path, map_location=map_location)
 
 	factorizer_name  = checkpoint['factorizer_name']
-	models = ['CP', 'ComplEx', 'DistMult']
+	models = ['CP', 'ComplEx', 'DistMult', 'SimplE']
 	if 'cp' in factorizer_name.lower():
 		model = CP(metadata['data_shape'], metadata['rank'], metadata['init'])
 	elif 'complex' in factorizer_name.lower():
 		model = ComplEx(metadata['data_shape'], metadata['rank'], metadata['init'])
 	elif 'distmult' in factorizer_name.lower():
 		model = DistMult(metadata['data_shape'], metadata['rank'], metadata['init'])
+	elif 'simple' in factorizer_name.lower():
+		model = SimplE(metadata['data_shape'], metadata['rank'], metadata['init'])
 	else:
 		raise ValueError(f'Model {factorizer_name} not in {models}')
 
@@ -196,7 +198,7 @@ if __name__ == "__main__":
 		'path'
 	)
 
-	models = ['CP', 'ComplEx', 'DistMult']
+	models = ['CP', 'ComplEx', 'DistMult', 'SimplE']
 	parser.add_argument(
 		'--model', choices=models, default='ComplEx',
 		help="Model in {}".format(models)
@@ -271,7 +273,8 @@ if __name__ == "__main__":
 		model = {
 			'CP': lambda: CP(dataset.get_shape(), args.rank, args.init),
 			'ComplEx': lambda: ComplEx(dataset.get_shape(), args.rank, args.init),
-			'DistMult': lambda: DistMult(dataset.get_shape(), args.rank, args.init)
+			'DistMult': lambda: DistMult(dataset.get_shape(), args.rank, args.init),
+            'SimplE': lambda: SimplE(dataset.get_shape(), args.rank, args.init)
 		}[args.model]()
 
 		regularizer = {
