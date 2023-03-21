@@ -45,12 +45,14 @@ if __name__ == '__main__':
                                         best_simple_batch_size_fb = batch_size
                                         best_simple_reg_fb = reg
                                         best_simple_rank_fb = rank
+                                        best_simple_match_fb = line
                                 elif model_name == 'ComplEx':
                                     if hit3 > best_complex_fb:
                                         best_complex_fb = hit3
                                         best_complex_batch_size_fb = batch_size
                                         best_complex_reg_fb = reg
                                         best_complex_rank_fb = rank
+                                        best_complex_match_fb = line
                         
                             elif dataset_name == 'NELL':
                                 if model_name == 'SimplE':
@@ -59,27 +61,33 @@ if __name__ == '__main__':
                                         best_simple_batch_size_nell = batch_size
                                         best_simple_reg_nell = reg
                                         best_simple_rank_nell = rank
+                                        best_simple_match_nell = line
                                 elif model_name == 'ComplEx':
                                     if hit3 > best_complex_nell:
                                         best_complex_nell = hit3
                                         best_complex_batch_size_nell = batch_size
                                         best_complex_reg_nell = reg
                                         best_complex_rank_nell = rank
+                                        best_complex_match_nell = line
 
 
     print("Best SimplE FB15k: ", best_simple_fb)
     print("Best SimplE FB15k batch size: ", best_simple_batch_size_fb)
     print("Best SimplE FB15k reg: ", best_simple_reg_fb)
     print("Best SimplE FB15k rank: ", best_simple_rank_fb)
+    print("Best SimplE FB15k results: ", best_simple_match_fb)
     print("Best SimplE NELL: ", best_simple_nell)
     print("Best SimplE NELL batch size: ", best_simple_batch_size_nell)
     print("Best SimplE NELL reg: ", best_simple_reg_nell)
     print("Best SimplE NELL rank: ", best_simple_rank_nell)
+    print("Best SimplE NELL results: ", best_simple_match_nell)
     print("Best ComplEx FB15k: ", best_complex_fb)
     print("Best ComplEx FB15k batch size: ", best_complex_batch_size_fb)
     print("Best ComplEx FB15k reg: ", best_complex_reg_fb)
     print("Best ComplEx FB15k rank: ", best_complex_rank_fb)
+    print("Best ComplEx FB15k results: ", best_complex_match_fb)
     print("Best ComplEx NELL: ", best_complex_nell)
     print("Best ComplEx NELL batch size: ", best_complex_batch_size_nell)
     print("Best ComplEx NELL reg: ", best_complex_reg_nell)
     print("Best ComplEx NELL rank: ", best_complex_rank_nell)
+    print("Best ComplEx NELL results: ", best_complex_match_nell)
