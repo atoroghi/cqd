@@ -10,6 +10,7 @@ if __name__ == '__main__':
     best_simple_nell = 0; best_simple_batch_size_nell = 0; best_simple_reg_nell = 0; best_simple_rank_nell = 0
     best_complex_fb = 0; best_complex_batch_size_fb = 0; best_complex_reg_fb = 0; best_complex_rank_fb = 0
     best_complex_nell = 0; best_complex_batch_size_nell = 0; best_complex_reg_nell = 0; best_complex_rank_nell = 0
+    i = 0
     for filename in os.listdir(directory):
         
         if filename.endswith(".out"):
@@ -19,8 +20,10 @@ if __name__ == '__main__':
                     if "model" in line:
                         if "SimplE" in line:
                             model_name = "SimplE"
+                            
                         elif "ComplEx" in line:
                             model_name = "ComplEx"
+                            
                     if "dataset" in line:
                         if "FB15k-237" in line:
                             dataset_name = "FB15k-237"
@@ -32,10 +35,10 @@ if __name__ == '__main__':
                         reg = line
                     if "batch_size" in line:
                         batch_size = line
-#
+##
                     if "TEST" in line:
                         match = re.search(r"tensor\(\[(\d+\.\d+), (\d+\.\d+), (\d+\.\d+)\]\)", line)
-
+#
                         if match:
                             hit3 = float(match.group(2))
                             if dataset_name == 'FB15k-237':
