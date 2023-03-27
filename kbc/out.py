@@ -25,10 +25,13 @@ if __name__ == '__main__':
                             model_name = "ComplEx"
                             
                     if "dataset" in line:
-                        if "FB15k-237" in line:
+                        if "FB15k" in line and "237" in line:
                             dataset_name = "FB15k-237"
+                            print(filename)
                         elif "NELL" in line:
                             dataset_name = "NELL"
+                        else:
+                            dataset_name = "other"
                     if "rank" in line:
                         rank = re.search(r'\d+', line).group()
                     if "reg" in line and "zer" not in line:
@@ -78,24 +81,24 @@ if __name__ == '__main__':
                                         best_complex_name_nell = filename
 
 
-    print("Best SimplE FB15k: ", best_simple_fb)
-    print("Best SimplE FB15k batch size: ", best_simple_batch_size_fb)
-    print("Best SimplE FB15k reg: ", best_simple_reg_fb)
-    print("Best SimplE FB15k rank: ", best_simple_rank_fb)
-    print("Best SimplE FB15k results: ", best_simple_match_fb)
-    print("Best SimplE Name FB15k: ", best_simple_name_fb)
+    print("Best SimplE FB15k-237: ", best_simple_fb)
+    print("Best SimplE FB15k-237 batch size: ", best_simple_batch_size_fb)
+    print("Best SimplE FB15k-237 reg: ", best_simple_reg_fb)
+    print("Best SimplE FB15k-237 rank: ", best_simple_rank_fb)
+    print("Best SimplE FB15k-237 results: ", best_simple_match_fb)
+    print("Best SimplE Name FB15k-237: ", best_simple_name_fb)
     print("Best SimplE NELL: ", best_simple_nell)
     print("Best SimplE NELL batch size: ", best_simple_batch_size_nell)
     print("Best SimplE NELL reg: ", best_simple_reg_nell)
     print("Best SimplE NELL rank: ", best_simple_rank_nell)
     print("Best SimplE NELL results: ", best_simple_match_nell)
     print("Best SimplE Name NELL: ", best_simple_name_nell)
-    print("Best ComplEx FB15k: ", best_complex_fb)
-    print("Best ComplEx FB15k batch size: ", best_complex_batch_size_fb)
-    print("Best ComplEx FB15k reg: ", best_complex_reg_fb)
-    print("Best ComplEx FB15k rank: ", best_complex_rank_fb)
-    print("Best ComplEx FB15k results: ", best_complex_match_fb)
-    print("Best ComplEx Name FB15k: ", best_complex_name_fb)
+    print("Best ComplEx FB15k-237: ", best_complex_fb)
+    print("Best ComplEx FB15k-237 batch size: ", best_complex_batch_size_fb)
+    print("Best ComplEx FB15k-237 reg: ", best_complex_reg_fb)
+    print("Best ComplEx FB15k-237 rank: ", best_complex_rank_fb)
+    print("Best ComplEx FB15k-237 results: ", best_complex_match_fb)
+    print("Best ComplEx Name FB15k-237: ", best_complex_name_fb)
     print("Best ComplEx NELL: ", best_complex_nell)
     print("Best ComplEx NELL batch size: ", best_complex_batch_size_nell)
     print("Best ComplEx NELL reg: ", best_complex_reg_nell)
