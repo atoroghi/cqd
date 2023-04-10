@@ -4,7 +4,7 @@
 # This source code is licensed under the license found in the
 # LICENSE file in the root directory of this source tree.
 #
-
+import sys
 import tqdm
 import torch
 from torch import nn
@@ -40,10 +40,9 @@ class KBCOptimizer(object):
                 input_batch = actual_examples[
                     b_begin:b_begin + self.batch_size
                 ].cuda()
-
+ 
                 predictions, factors = self.model.forward(input_batch)
                 truth = input_batch[:, 2]
-
                 l_fit = loss(predictions, truth)
                 l_reg = self.regularizer.forward(factors)
                 l = l_fit + l_reg

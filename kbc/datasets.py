@@ -34,6 +34,15 @@ class Dataset(object):
         self.to_skip: Dict[str, Dict[Tuple[int, int], List[int]]] = pickle.load(inp_f)
         inp_f.close()
 
+        
+        head_file = open(str(self.root / ('valid_heads.pickle')), 'rb')
+        self.valid_heads = pickle.load(head_file)
+        head_file.close()
+        tail_file = open(str(self.root / ('valid_tails.pickle')), 'rb')
+        self.valid_tails = pickle.load(tail_file)
+        tail_file.close()
+
+
     def get_examples(self, split):
         return self.data[split]
 

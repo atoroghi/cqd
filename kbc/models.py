@@ -249,12 +249,15 @@ class KBCModel(nn.Module, ABC):
 
     def link_prediction(self, chains: List):
         lhs_1, rel_1 = self.__get_chains__(chains, graph_type=QuerDAG.TYPE1_1.value)
+        # self.forward_emb returns the score of each node to be the rhs of the given lhs and rel
         return self.forward_emb(lhs_1, rel_1)
 
     def optimize_chains(self, chains: List, regularizer: Regularizer,
                         max_steps: int = 20, lr: float = 0.1,
                         optimizer: str = 'adam', norm_type: str = 'min'):
         def scoring_fn(score_all=False):
+            # score_1: score of the proposed fact, factors_1: regularization loss of the nodes and rel of the 
+            # proposed fact
             score_1, factors_1 = self.score_emb(lhs_1, rel_1, obj_guess_1)
             score_2, factors_2 = self.score_emb(obj_guess_1, rel_2, obj_guess_2)
             factors = [factors_1[2], factors_2[2]]
@@ -297,7 +300,237 @@ class KBCModel(nn.Module, ABC):
             params.append(obj_guess_3)
 
         scores = self._optimize_variables(scoring_fn, params, optimizer, lr, max_steps)
+        return scores
 
+    def optimize_chains_bpl(self, chains: List, regularizer: Regularizer,
+                        cov_anchor: float = 0.1,
+                        cov_var: float = 0.1, cov_target: float = 0.1, possible_heads_emb: list = None, possible_tails_emb: list = None,
+                        all_nodes_embs: torch.tensor = None):
+
+        
+        if len(chains) == 2:
+            emb_dim = chains[0][0].shape[1] // 2
+            all_heads_embs = all_nodes_embs[:, :emb_dim]
+            all_tails_embs = all_nodes_embs[:, emb_dim:]
+            mu_m_for = possible_tails_emb[0][:, :emb_dim]
+            h_m_for = (1/cov_var) * mu_m_for
+            mu_m_inv = possible_tails_emb[0][:, emb_dim:]
+            h_m_inv = (1/cov_var) * mu_m_inv
+            #lhs_1 is a tensor of size (query_size, (2*)emb_dim)
+            lhs_1, rel_1, rel_2 = self.__get_chains__(chains, graph_type=QuerDAG.TYPE1_2.value)
+            # update the precision and information of the variable given the anchor
+            # when updating m given d, we should use the tail embedding of d
+            mu_d_for = lhs_1[:, emb_dim:] * rel_1[:, :emb_dim]
+            h_d_for = (1/cov_anchor) * mu_d_for
+            h_m_for = h_m_for + h_d_for
+            J_m_for = (1/cov_anchor) + (1/cov_var)
+            mu_d_inv = lhs_1[:, :emb_dim] * rel_1[:, emb_dim:]
+            h_d_inv = (1/cov_anchor) * mu_d_inv
+            h_m_inv = h_m_inv + h_d_inv
+            J_m_inv = (1/cov_anchor) + (1/cov_var)
+
+            # update the precision and information of the target node given the variable
+            mu_u_for = possible_tails_emb[1][:,:emb_dim]
+            h_u_for = (1/cov_target) * mu_u_for
+            mu_u_inv = possible_tails_emb[1][:,emb_dim:]
+            h_u_inv = (1/cov_target) * mu_u_inv
+
+            #TODO: check if this direction is correct or we should use the tail embedding of m
+            h_u_for = h_u_for - rel_2[:, :emb_dim] * (1 / J_m_for) * h_m_for
+            J_u_for = (1/cov_target) - rel_2[:, :emb_dim] * (1 / J_m_for) * rel_2[:, :emb_dim]
+
+            h_u_inv = h_u_inv - rel_2[:, emb_dim:] * (1 / J_m_inv) * h_m_inv
+            J_u_inv = (1/cov_target) - rel_2[:, emb_dim:] * (1 / J_m_inv) * rel_2[:, emb_dim:]
+
+            mu_u_for = h_u_for / J_u_for
+            mu_u_inv = h_u_inv / J_u_inv
+
+        elif len(chains) == 3:
+            emb_dim = chains[0][0].shape[1] // 2
+            all_heads_embs = all_nodes_embs[:, :emb_dim]
+            all_tails_embs = all_nodes_embs[:, emb_dim:]
+            mu_m1_for = possible_tails_emb[0][:, :emb_dim]
+            h_m1_for = (1/cov_var) * mu_m1_for
+            mu_m1_inv = possible_tails_emb[0][:, emb_dim:]
+            h_m1_inv = (1/cov_var) * mu_m1_inv
+            #lhs_1 is a tensor of size (query_size, (2*)emb_dim)
+            lhs_1, rel_1, rel_2, rel_3 = self.__get_chains__(chains, graph_type=QuerDAG.TYPE1_3.value)
+            # update the precision and information of the first variable given the anchor
+            mu_d_for = lhs_1[:, emb_dim:] * rel_1[:, :emb_dim]
+            h_d_for = (1/cov_anchor) * mu_d_for
+            h_m1_for = h_m1_for + h_d_for
+            J_m1_for = (1/cov_anchor) + (1/cov_var)
+            mu_d_inv = lhs_1[:, :emb_dim] * rel_1[:, emb_dim:]
+            h_d_inv = (1/cov_anchor) * mu_d_inv
+            h_m1_inv = h_m1_inv + h_d_inv
+            J_m1_inv = (1/cov_anchor) + (1/cov_var)
+
+            # update the precision and information of the second variable given the first variable
+            mu_m2_for = possible_tails_emb[1][:,:emb_dim]
+            h_m2_for = (1/cov_var) * mu_m2_for
+            mu_m2_inv = possible_tails_emb[1][:,emb_dim:]
+            h_m2_inv = (1/cov_var) * mu_m2_inv
+            h_m2_for = h_m2_for - rel_2[:, :emb_dim] * (1 / J_m1_for) * h_m1_for
+            J_m2_for = (1/cov_var) - rel_2[:, :emb_dim] * (1 / J_m1_for) * rel_2[:, :emb_dim]
+            h_m2_inv = h_m2_inv - rel_2[:, emb_dim:] * (1 / J_m1_inv) * h_m1_inv
+            J_m2_inv = (1/cov_var) - rel_2[:, emb_dim:] * (1 / J_m1_inv) * rel_2[:, emb_dim:]
+
+            # update the precision and information of the target node given the second variable
+            mu_u_for = possible_tails_emb[2][:,:emb_dim]
+            h_u_for = (1/cov_target) * mu_u_for
+            mu_u_inv = possible_tails_emb[2][:,emb_dim:]
+            h_u_inv = (1/cov_target) * mu_u_inv
+
+            h_u_for = h_u_for - rel_3[:, :emb_dim] * (1 / J_m2_for) * h_m2_for
+            J_u_for = (1/cov_target) - rel_3[:, :emb_dim] * (1 / J_m2_for) * rel_3[:, :emb_dim]
+
+            h_u_inv = h_u_inv - rel_3[:, emb_dim:] * (1 / J_m2_inv) * h_m2_inv
+            J_u_inv = (1/cov_target) - rel_3[:, emb_dim:] * (1 / J_m2_inv) * rel_3[:, emb_dim:]
+
+            mu_u_for = h_u_for / J_u_for
+            mu_u_inv = h_u_inv / J_u_inv
+        
+        else:
+            assert False, f'Invalid number of chains: {len(chains)}'
+        
+        scores = []
+
+        #a = torch.tensor ([1,2,3, -1])
+        #b = torch.tensor ([[4,5,6,-2], [7,8,9,-2], [10,11,12,-2]])
+        #c =0.5*( b@ a.T)
+        #print(c)
+
+        scores = torch.zeros( mu_u_for.shape[0], all_heads_embs.shape[0])
+
+        for i in range(scores.shape[0]):
+        #    # get the dot product between row[i] of mu_u_for and each row of all_heads_embs
+            scores [i] = torch.clip( 0.5*( all_heads_embs @ (mu_u_for[i]).T + all_tails_embs @ (mu_u_inv[i]).T), min=-20, max=20)
+
+
+        #obj_guess_1 = torch.normal(0, self.init_size, lhs_1.shape, device=lhs_1.device, requires_grad=True)
+        #obj_guess_2 = torch.normal(0, self.init_size, lhs_1.shape, device=lhs_1.device, requires_grad=True)
+        #params = [obj_guess_1, obj_guess_2]
+        #if len(chains) == 3:
+        #    obj_guess_3 = torch.normal(0, self.init_size, lhs_1.shape, device=lhs_1.device, requires_grad=True)
+        #    params.append(obj_guess_3)
+
+        #scores = self._optimize_variables(scoring_fn, params, optimizer, lr, max_steps)
+
+        return scores
+
+    def optimize_intersections_bpl(self, chains: List, regularizer: Regularizer,
+                               max_steps: int = 20, lr: float = 0.1,
+                               optimizer:str = 'adam', norm_type: str = 'min',
+                               disjunctive=False, cov_anchor: float = 0.1,
+                        cov_var: float = 0.1, cov_target: float = 0.1, possible_heads_emb: list = None, possible_tails_emb: list = None,
+                        all_nodes_embs: torch.tensor = None):
+
+        if len(chains) == 2:
+            emb_dim = chains[0][0].shape[1] // 2
+            all_heads_embs = all_nodes_embs[:, :emb_dim]
+            all_tails_embs = all_nodes_embs[:, emb_dim:]
+            mu_u_for = possible_tails_emb[0][:, :emb_dim]
+            h_u_for = (1/cov_target) * mu_u_for
+            mu_u_inv = possible_tails_emb[0][:, emb_dim:]
+            h_u_inv = (1/cov_target) * mu_u_inv
+            #lhs_1 is a tensor of size (query_size, (2*)emb_dim)
+            raw_chain = self.__get_chains__(chains, graph_type=QuerDAG.TYPE2_2.value)
+            lhs_1, rel_1, lhs_2, rel_2 = raw_chain
+            mu_d1_for = lhs_1[:, emb_dim:] * rel_1[:, :emb_dim]
+            h_d1_for = (1/cov_anchor) * mu_d1_for
+            mu_d2_for = lhs_2[:, emb_dim:] * rel_2[:, :emb_dim]
+            h_d2_for = (1/cov_anchor) * mu_d2_for
+            mu_d1_inv = lhs_1[:, :emb_dim] * rel_1[:, emb_dim:]
+            h_d1_inv = (1/cov_anchor) * mu_d1_inv
+            mu_d2_inv = lhs_2[:, :emb_dim] * rel_2[:, emb_dim:]
+            h_d2_inv = (1/cov_anchor) * mu_d2_inv
+
+            if not disjunctive:
+                h_u_for = h_u_for + h_d1_for + h_d2_for
+                J_u_for = (1/cov_anchor) + (1/cov_anchor) + (1/cov_target)
+                mu_u_for = h_u_for / J_u_for
+                h_u_inv = h_u_inv + h_d1_inv + h_d2_inv
+                J_u_inv = (1/cov_anchor) + (1/cov_anchor) + (1/cov_target)
+                mu_u_inv = h_u_inv / J_u_inv
+            elif disjunctive:
+                h_u_for1 = h_u_for + h_d1_for
+                J_u_for1 = (1/cov_anchor) + (1/cov_target)
+                mu_u_for1 = h_u_for1 / J_u_for1
+                h_u_for2 = h_u_for + h_d2_for
+                J_u_for2 = (1/cov_anchor) + (1/cov_target)
+                mu_u_for2 = h_u_for2 / J_u_for2
+                h_u_inv1 = h_u_inv + h_d1_inv
+                J_u_inv1 = (1/cov_anchor) + (1/cov_target)
+                mu_u_inv1 = h_u_inv1 / J_u_inv1
+                h_u_inv2 = h_u_inv + h_d2_inv
+                J_u_inv2 = (1/cov_anchor) + (1/cov_target)
+                mu_u_inv2 = h_u_inv2 / J_u_inv2
+
+
+
+        elif len(chains) == 3:
+            emb_dim = chains[0][0].shape[1] // 2
+            all_heads_embs = all_nodes_embs[:, :emb_dim]
+            all_tails_embs = all_nodes_embs[:, emb_dim:]
+            mu_u_for = possible_tails_emb[0][:, :emb_dim]
+            h_u_for = (1/cov_target) * mu_u_for
+            mu_u_inv = possible_tails_emb[0][:, emb_dim:]
+            h_u_inv = (1/cov_target) * mu_u_inv
+            #lhs_1 is a tensor of size (query_size, (2*)emb_dim)
+            raw_chain = self.__get_chains__(chains, graph_type=QuerDAG.TYPE2_3.value)
+            lhs_1, rel_1, lhs_2, rel_2, lhs_3, rel_3 = raw_chain
+
+            mu_d1_for = lhs_1[:, emb_dim:] * rel_1[:, :emb_dim]
+            h_d1_for = (1/cov_anchor) * mu_d1_for
+
+            mu_d2_for = lhs_2[:, emb_dim:] * rel_2[:, :emb_dim]
+            h_d2_for = (1/cov_anchor) * mu_d2_for
+
+            mu_d3_for = lhs_3[:, emb_dim:] * rel_3[:, :emb_dim]
+            h_d3_for = (1/cov_anchor) * mu_d3_for
+
+            h_u_for = h_u_for + h_d1_for + h_d2_for + h_d3_for
+            J_u_for = (1/cov_anchor) + (1/cov_anchor) + (1/cov_anchor) + (1/cov_target)
+            mu_u_for = h_u_for / J_u_for
+
+            mu_d1_inv = lhs_1[:, :emb_dim] * rel_1[:, emb_dim:]
+            h_d1_inv = (1/cov_anchor) * mu_d1_inv
+
+            mu_d2_inv = lhs_2[:, :emb_dim] * rel_2[:, emb_dim:]
+            h_d2_inv = (1/cov_anchor) * mu_d2_inv
+
+            mu_d3_inv = lhs_3[:, :emb_dim] * rel_3[:, emb_dim:]
+            h_d3_inv = (1/cov_anchor) * mu_d3_inv
+
+            h_u_inv = h_u_inv + h_d1_inv + h_d2_inv + h_d3_inv
+            J_u_inv = (1/cov_anchor) + (1/cov_anchor) + (1/cov_anchor) + (1/cov_target)
+            mu_u_inv = h_u_inv / J_u_inv
+        else:
+            raise ValueError(f'Invalid number of intersections: {len(chains)}')
+
+        
+        #obj_guess = torch.normal(0, self.init_size, lhs_2.shape, device=lhs_2.device, requires_grad=True)
+        #params = [obj_guess]
+
+        #scores = self._optimize_variables(scoring_fn, params, optimizer, lr, max_steps)
+        #return scores
+        scores = []
+
+        scores = torch.zeros( mu_u_for.shape[0], all_heads_embs.shape[0])
+        if not disjunctive:
+            for i in range(scores.shape[0]):
+            ## get the dot product between row[i] of mu_u_for and each row of all_heads_embs
+                scores [i] = torch.clip( 0.5*( all_heads_embs @ (mu_u_for[i]).T + all_tails_embs @ (mu_u_inv[i]).T), min=-20, max=20)
+        
+        elif disjunctive:
+            scores1 = torch.zeros( mu_u_for1.shape[0], all_heads_embs.shape[0])
+            scores2 = torch.zeros( mu_u_for2.shape[0], all_heads_embs.shape[0])
+            for i in range(scores.shape[0]):
+            ## get the dot product between row[i] of mu_u_for and each row of all_heads_embs
+                scores1 [i] = torch.clip( 0.5*( all_heads_embs @ (mu_u_for1[i]).T + all_tails_embs @ (mu_u_inv1[i]).T), min=-20, max=20)
+                scores2 [i] = torch.clip( 0.5*( all_heads_embs @ (mu_u_for2[i]).T + all_tails_embs @ (mu_u_inv2[i]).T), min=-20, max=20)
+            scores = scores1 + scores2
+        
         return scores
 
     def optimize_intersections(self, chains: List, regularizer: Regularizer,
@@ -355,6 +588,60 @@ class KBCModel(nn.Module, ABC):
         scores = self._optimize_variables(scoring_fn, params, optimizer, lr, max_steps)
         return scores
 
+    def optimize_3_3_bpl(self, chains: List, regularizer: Regularizer,
+                               max_steps: int = 20, lr: float = 0.1,
+                               optimizer:str = 'adam', norm_type: str = 'min',
+                               cov_anchor: float = 0.1,
+                        cov_var: float = 0.1, cov_target: float = 0.1, possible_heads_emb: list = None, possible_tails_emb: list = None,
+                        all_nodes_embs: torch.tensor = None):
+        #lhs_1 is a tensor of size (query_size, (2*)emb_dim)
+        lhs_1, rel_1, rel_2, lhs_2, rel_3 = self.__get_chains__(chains, graph_type=QuerDAG.TYPE3_3.value)
+        # updating the variable node given the first anchor node
+        emb_dim = chains[0][0].shape[1] // 2
+        all_heads_embs = all_nodes_embs[:, :emb_dim]
+        all_tails_embs = all_nodes_embs[:, emb_dim:]
+        mu_m_for = possible_tails_emb[0][:, :emb_dim]
+        h_m_for = (1/cov_var) * mu_m_for
+        mu_m_inv = possible_tails_emb[0][:, emb_dim:]
+        h_m_inv = (1/cov_var) * mu_m_inv
+        mu_d1_for = lhs_1[:, emb_dim:] * rel_1[:, :emb_dim]
+        h_d1_for = (1/cov_anchor) * mu_d1_for
+        h_m_for = h_m_for + h_d1_for
+        J_m_for = (1/cov_anchor) + (1/cov_var)
+        mu_d_inv = lhs_1[:, :emb_dim] * rel_1[:, emb_dim:]
+        h_d_inv = (1/cov_anchor) * mu_d_inv
+        h_m_inv = h_m_inv + h_d_inv
+        J_m_inv = (1/cov_anchor) + (1/cov_var)
+
+        # updating the target node given the variable node requires marginalization as in 2p, but not for the 
+        # second anchor
+        mu_u_for = possible_tails_emb[1][:, :emb_dim]
+        h_u_for = (1/cov_target) * mu_u_for
+        mu_u_inv = possible_tails_emb[1][:, emb_dim:]
+        h_u_inv = (1/cov_target) * mu_u_inv
+
+        mu_d2_for = lhs_2[:, emb_dim:] * rel_3[:, :emb_dim]
+        h_d2_for = (1/cov_anchor) * mu_d2_for
+        mu_d2_inv = lhs_2[:, :emb_dim] * rel_3[:, emb_dim:]
+        h_d2_inv = (1/cov_anchor) * mu_d2_inv
+
+        h_u_for = h_u_for + h_d2_for - rel_2[:, :emb_dim] * (1 / J_m_for) * h_m_for
+        J_u_for = (1/cov_target) + (1/cov_anchor) - rel_2[:, :emb_dim] * (1 / J_m_for) * rel_2[:, :emb_dim]
+        h_u_inv = h_u_inv + h_d2_inv - rel_2[:, emb_dim:] * (1 / J_m_inv) * h_m_inv
+        J_u_inv = (1/cov_target) + (1/cov_anchor) - rel_2[:, emb_dim:] * (1 / J_m_inv) * rel_2[:, emb_dim:]
+        mu_u_for = h_u_for / J_u_for
+        mu_u_inv = h_u_inv / J_u_inv
+
+        scores = []
+        scores = torch.zeros( mu_u_for.shape[0], all_heads_embs.shape[0])
+        for i in range(scores.shape[0]):
+            ## get the dot product between row[i] of mu_u_for and each row of all_heads_embs
+            scores [i] = torch.clip( 0.5*( all_heads_embs @ (mu_u_for[i]).T + all_tails_embs @ (mu_u_inv[i]).T), min=-20, max=20)
+
+        return scores
+
+
+
     def optimize_3_3(self, chains: List, regularizer: Regularizer,
                      max_steps: int = 20, lr: float = 0.1,
                      optimizer:str = 'adam', norm_type: str = 'min'):
@@ -391,6 +678,91 @@ class KBCModel(nn.Module, ABC):
 
         scores = self._optimize_variables(scoring_fn, params, optimizer, lr, max_steps)
         return scores
+
+    def optimize_4_3_bpl(self, chains: List, regularizer: Regularizer,
+                     max_steps: int = 20, lr: float = 0.1,
+                     optimizer: str = 'adam', norm_type: str = 'min',
+                     disjunctive=False, cov_anchor: float = 0.1,
+                        cov_var: float = 0.1, cov_target: float = 0.1, possible_heads_emb: list = None, possible_tails_emb: list = None,
+                        all_nodes_embs: torch.tensor = None):
+        lhs_1, rel_1, lhs_2, rel_2, rel_3 = self.__get_chains__(chains, graph_type=QuerDAG.TYPE4_3.value)
+        emb_dim = chains[0][0].shape[1] // 2
+        all_heads_embs = all_nodes_embs[:, :emb_dim]
+        all_tails_embs = all_nodes_embs[:, emb_dim:]
+        mu_m_for = possible_tails_emb[0][:, :emb_dim]
+        h_m_for = (1/cov_var) * mu_m_for
+        mu_m_inv = possible_tails_emb[0][:, emb_dim:]
+        h_m_inv = (1/cov_var) * mu_m_inv
+
+        mu_d1_for = lhs_1[:, emb_dim:] * rel_1[:, :emb_dim]
+        h_d1_for = (1/cov_anchor) * mu_d1_for
+        mu_d2_for = lhs_2[:, emb_dim:] * rel_2[:, :emb_dim]
+        h_d2_for = (1/cov_anchor) * mu_d2_for
+        mu_d1_inv = lhs_1[:, :emb_dim] * rel_1[:, emb_dim:]
+        h_d1_inv = (1/cov_anchor) * mu_d1_inv
+        mu_d2_inv = lhs_2[:, :emb_dim] * rel_2[:, emb_dim:]
+        h_d2_inv = (1/cov_anchor) * mu_d2_inv
+
+        mu_u_for = possible_tails_emb[2][:, :emb_dim]
+        h_u_for = (1/cov_target) * mu_u_for
+        mu_u_inv = possible_tails_emb[2][:, emb_dim:]
+        h_u_inv = (1/cov_target) * mu_u_inv
+
+        scores = torch.zeros( mu_u_for.shape[0], all_heads_embs.shape[0])
+
+        if not disjunctive:
+            h_m_for = h_m_for + h_d1_for + h_d2_for
+            J_m_for = (1/cov_var) + (1/cov_anchor) + (1/cov_anchor)
+            h_m_inv = h_m_inv + h_d1_inv + h_d2_inv
+            J_m_inv = (1/cov_var) + (1/cov_anchor) + (1/cov_anchor)
+            h_u_for = h_u_for - rel_3[:, :emb_dim] * (1 / J_m_for) * h_m_for
+            J_u_for = (1/cov_target) - rel_3[:, :emb_dim] * (1 / J_m_for) * rel_3[:, :emb_dim]
+            h_u_inv = h_u_inv - rel_3[:, emb_dim:] * (1 / J_m_inv) * h_m_inv
+            J_u_inv = (1/cov_target) - rel_3[:, emb_dim:] * (1 / J_m_inv) * rel_3[:, emb_dim:]
+
+            mu_u_for = h_u_for / J_u_for
+            mu_u_inv = h_u_inv / J_u_inv
+
+            for i in range(scores.shape[0]):
+                scores[i] =torch.clip( 0.5*( all_heads_embs @ (mu_u_for[i]).T + all_tails_embs @ (mu_u_inv[i]).T), min=-20, max=20)
+
+        elif disjunctive:
+            # finding first mu_u_for from the top chain
+            h_m_for1 = h_m_for + h_d1_for
+            J_m_for1 = (1/cov_var) + (1/cov_anchor)
+            h_u_for1 = h_u_for - rel_3[:, :emb_dim] * (1 / J_m_for1) * h_m_for1
+            J_u_for1 = (1/cov_target) - rel_3[:, :emb_dim] * (1 / J_m_for1) * rel_3[:, :emb_dim]
+            mu_u_for1 = h_u_for1 / J_u_for1
+
+            h_m_inv1 = h_m_inv + h_d1_inv
+            J_m_inv1 = (1/cov_var) + (1/cov_anchor)
+            h_u_inv1 = h_u_inv - rel_3[:, emb_dim:] * (1 / J_m_inv1) * h_m_inv1
+            J_u_inv1 = (1/cov_target) - rel_3[:, emb_dim:] * (1 / J_m_inv1) * rel_3[:, emb_dim:]
+            mu_u_inv1 = h_u_inv1 / J_u_inv1
+
+            # finding second mu_u_for from the bottom chain
+            h_m_for2 = h_m_for + h_d2_for
+            J_m_for2 = (1/cov_var) + (1/cov_anchor)
+            h_u_for2 = h_u_for - rel_3[:, :emb_dim] * (1 / J_m_for2) * h_m_for2
+            J_u_for2 = (1/cov_target) - rel_3[:, :emb_dim] * (1 / J_m_for2) * rel_3[:, :emb_dim]
+            mu_u_for2 = h_u_for2 / J_u_for2
+
+            h_m_inv2 = h_m_inv + h_d2_inv
+            J_m_inv2 = (1/cov_var) + (1/cov_anchor)
+            h_u_inv2 = h_u_inv - rel_3[:, emb_dim:] * (1 / J_m_inv2) * h_m_inv2
+            J_u_inv2 = (1/cov_target) - rel_3[:, emb_dim:] * (1 / J_m_inv2) * rel_3[:, emb_dim:]
+            mu_u_inv2 = h_u_inv2 / J_u_inv2
+
+            scores1 = torch.zeros( mu_u_for1.shape[0], all_heads_embs.shape[0])
+            scores2 = torch.zeros( mu_u_for2.shape[0], all_heads_embs.shape[0])
+            for i in range(scores.shape[0]):
+                scores1[i] = torch.clip( 0.5*( all_heads_embs @ (mu_u_for1[i]).T + all_tails_embs @ (mu_u_inv1[i]).T), min=-20, max=20)
+                scores2[i] = torch.clip( 0.5*( all_heads_embs @ (mu_u_for2[i]).T + all_tails_embs @ (mu_u_inv2[i]).T), min=-20, max=20)
+
+            scores = scores1 + scores2
+
+            return scores
+        
 
     def optimize_4_3(self, chains: List, regularizer: Regularizer,
                      max_steps: int = 20, lr: float = 0.1,

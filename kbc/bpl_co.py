@@ -24,11 +24,17 @@ def score_queries(args):
 
     data_hard = pickle.load(open(data_hard_path, 'rb'))
     data_complete = pickle.load(open(data_complete_path, 'rb'))
+    valid_heads_path = osp.join(args.path, 'kbc_data','valid_heads.pickle')
+    valid_heads = pickle.load(open(valid_heads_path, 'rb'))
+    valid_tails_path = osp.join(args.path, 'kbc_data','valid_tails.pickle')
+    valid_tails = pickle.load(open(valid_tails_path, 'rb'))
+
+
 
     # Instantiate singleton KBC object
-    preload_env(args.model_path, data_hard, args.chain_type, mode='hard')
+    preload_env(args.model_path, data_hard, args.chain_type, mode='hard', valid_heads=valid_heads, valid_tails=valid_tails)
     env = preload_env(args.model_path, data_complete, args.chain_type,
-                      mode='complete')
+                      mode='complete', valid_heads=valid_heads, valid_tails=valid_tails)
     # list of hard queries (queries[0]: 2865_5_-1_-1_63_-1234)
     queries = env.keys_hard
     # a dictionary of the form: {2865_5_-1_-1_63_-1234: [4822, 4398]]}
@@ -36,6 +42,12 @@ def score_queries(args):
     test_ans = env.target_ids_complete
     chains = env.chains
     kbc = env.kbc
+    possible_heads_emb = env.possible_heads_emb
+    possible_tails_emb = env.possible_tails_emb
+    all_nodes_indices = torch.arange(kbc.model.sizes[0])
+    # make a tensor of range (0, 14541)
+    device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+    all_nodes_embs = kbc.model.entity_embeddings(all_nodes_indices.to(device))
 
     if args.reg is not None:
         env.kbc.regularizer.weight = args.reg
@@ -64,38 +76,45 @@ def score_queries(args):
             scores_lst += [batch_scores]
         #scores is a tensor of shape (no of queries, no of nodes) containing the score of each node for being the target for each query
         scores = torch.cat(scores_lst, 0)
-
+# 2p and 3p
     elif args.chain_type in (QuerDAG.TYPE1_2.value, QuerDAG.TYPE1_3.value):
-        scores = kbc.model.optimize_chains(chains, kbc.regularizer,
-                                           max_steps=args.max_steps,
-                                           lr=args.lr,
-                                           optimizer=args.optimizer,
-                                           norm_type=args.t_norm)
-
+        scores = kbc.model.optimize_chains_bpl(chains, kbc.regularizer
+                                           ,cov_anchor=args.cov_anchor,
+                                            cov_var=args.cov_var,
+                                             cov_target=args.cov_target, possible_heads_emb=possible_heads_emb
+                                            , possible_tails_emb=possible_tails_emb,
+                                            all_nodes_embs=all_nodes_embs)
+# 2i, 2u, 3i 
     elif args.chain_type in (QuerDAG.TYPE2_2.value, QuerDAG.TYPE2_2_disj.value,
                              QuerDAG.TYPE2_3.value):
-        scores = kbc.model.optimize_intersections(chains, kbc.regularizer,
+        scores = kbc.model.optimize_intersections_bpl(chains, kbc.regularizer,
+                                            disjunctive=disjunctive, cov_anchor=args.cov_anchor,
+                                            cov_var=args.cov_var, cov_target=args.cov_target, possible_heads_emb=possible_heads_emb
+                                            , possible_tails_emb=possible_tails_emb,
+                                            all_nodes_embs=all_nodes_embs)
+# pi
+    elif args.chain_type == QuerDAG.TYPE3_3.value:
+        scores = kbc.model.optimize_3_3_bpl(chains, kbc.regularizer,
                                                   max_steps=args.max_steps,
                                                   lr=args.lr,
                                                   optimizer=args.optimizer,
                                                   norm_type=args.t_norm,
-                                                  disjunctive=disjunctive)
-
-    elif args.chain_type == QuerDAG.TYPE3_3.value:
-        scores = kbc.model.optimize_3_3(chains, kbc.regularizer,
-                                        max_steps=args.max_steps,
-                                        lr=args.lr,
-                                        optimizer=args.optimizer,
-                                        norm_type=args.t_norm)
-
+                                                  cov_anchor=args.cov_anchor,
+                                            cov_var=args.cov_var, cov_target=args.cov_target, possible_heads_emb=possible_heads_emb
+                                            , possible_tails_emb=possible_tails_emb,
+                                            all_nodes_embs=all_nodes_embs)
+# ip and up
     elif args.chain_type in (QuerDAG.TYPE4_3.value,
                              QuerDAG.TYPE4_3_disj.value):
-        scores = kbc.model.optimize_4_3(chains, kbc.regularizer,
+        scores = kbc.model.optimize_4_3_bpl(chains, kbc.regularizer,
                                         max_steps=args.max_steps,
                                         lr=args.lr,
                                         optimizer=args.optimizer,
                                         norm_type=args.t_norm,
-                                        disjunctive=disjunctive)
+                                        disjunctive=disjunctive, cov_anchor=args.cov_anchor,
+                                            cov_var=args.cov_var, cov_target=args.cov_target, possible_heads_emb=possible_heads_emb
+                                            , possible_tails_emb=possible_tails_emb,
+                                            all_nodes_embs=all_nodes_embs)
     else:
         raise ValueError(f'Uknown query type {args.chain_type}')
 
@@ -139,5 +158,8 @@ if __name__ == "__main__":
     parser.add_argument('--optimizer', type=str, default='adam',
                         choices=['adam', 'adagrad', 'sgd'])
     parser.add_argument('--max-steps', type=int, default=1000)
+    parser.add_argument('--cov_anchor', type=float, default=0.1, help='Covariance of the anchor node')
+    parser.add_argument('--cov_var', type=float, default=0.1, help='Covariance of the variable node')
+    parser.add_argument('--cov_target', type=float, default=0.1, help='Covariance of the target node')
 
     main(parser.parse_args())

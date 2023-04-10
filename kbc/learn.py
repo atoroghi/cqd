@@ -66,6 +66,11 @@ def train_kbc(KBC_optimizer, dataset, args):
 				os.mkdir('models')
 
 			model_dir = os.path.join(os.getcwd(),'models')
+			print("model_dir")
+			print(model_dir)
+			with open(os.path.join(model_dir,'{}-metadata-{}.json'.format(args.dataset, timestamp)), 'w') as json_file:
+				json.dump(vars(args), json_file)
+			print("saving model")
 			torch.save({'epoch': epoch,
 						'model_name': args.dataset,
 						'factorizer_name': args.model,
