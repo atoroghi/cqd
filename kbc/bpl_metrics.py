@@ -4,7 +4,7 @@ from tqdm import tqdm
 import logging
 import sys
 
-def evaluation(scores, queries, test_ans, test_ans_hard):
+def evaluation(scores, queries, test_ans, test_ans_hard, rel_id, ent_id, explain):
     nentity = len(scores[0])
     step = 0
     logs = []

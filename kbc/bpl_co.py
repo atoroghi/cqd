@@ -11,7 +11,7 @@ import torch
 
 from kbc.utils import QuerDAG
 from kbc.utils import preload_env
-from kbc.metrics import evaluation
+from kbc.bpl_metrics import evaluation
 
 
 def score_queries(args):
@@ -28,8 +28,10 @@ def score_queries(args):
     valid_heads = pickle.load(open(valid_heads_path, 'rb'))
     valid_tails_path = osp.join(args.path, 'kbc_data','valid_tails.pickle')
     valid_tails = pickle.load(open(valid_tails_path, 'rb'))
-
-
+    ent_id_path = osp.join(args.path, 'ind2ent.pkl')
+    rel_id_path = osp.join(args.path, 'ind2rel.pkl')
+    ent_id = pickle.load(open(ent_id_path, 'rb'))
+    rel_id = pickle.load(open(rel_id_path, 'rb'))
 
     # Instantiate singleton KBC object
     preload_env(args.model_path, data_hard, args.chain_type, mode='hard', valid_heads=valid_heads, valid_tails=valid_tails)
@@ -118,8 +120,8 @@ def score_queries(args):
     else:
         raise ValueError(f'Uknown query type {args.chain_type}')
 
-    return scores, queries, test_ans, test_ans_hard
 
+    return scores, queries, test_ans, test_ans_hard
 
 def main(args):
     print("BPL OPTIMIZATION")
@@ -130,7 +132,12 @@ def main(args):
     print("cov_var:", args.cov_var)
     print("cov_target:", args.cov_target)
     scores, queries, test_ans, test_ans_hard = score_queries(args)
-    metrics = evaluation(scores, queries, test_ans, test_ans_hard)
+
+    ent_id_path = osp.join(args.path, 'ind2ent.pkl')
+    rel_id_path = osp.join(args.path, 'ind2rel.pkl')
+    ent_id = pickle.load(open(ent_id_path, 'rb'))
+    rel_id = pickle.load(open(rel_id_path, 'rb'))
+    metrics = evaluation(scores, queries, test_ans, test_ans_hard, rel_id, ent_id, args.explain)
     
     print(metrics)
 
@@ -145,6 +152,7 @@ if __name__ == "__main__":
 
     datasets = ['FB15k', 'FB15k-237', 'NELL']
     modes = ['valid', 'test', 'train']
+    explains = ['no', 'yes']
     chain_types = [t.value for t in QuerDAG]
 
     t_norms = ['min', 'prod']
@@ -155,7 +163,8 @@ if __name__ == "__main__":
     parser.add_argument('--dataset', choices=datasets, help="Dataset in {}".format(datasets))
     parser.add_argument('--mode', choices=modes, default='test',
                         help="Dataset validation mode in {}".format(modes))
-
+    parser.add_argument('--explain', choices=explains, default='no',
+                        help="Whether to store other top candidates")
     parser.add_argument('--chain_type', choices=chain_types, default=QuerDAG.TYPE1_1.value,
                         help="Chain type experimenting for ".format(chain_types))
 
