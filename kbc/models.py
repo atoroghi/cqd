@@ -685,6 +685,7 @@ class KBCModel(nn.Module, ABC):
                      disjunctive=False, cov_anchor: float = 0.1,
                         cov_var: float = 0.1, cov_target: float = 0.1, possible_heads_emb: list = None, possible_tails_emb: list = None,
                         all_nodes_embs: torch.tensor = None):
+        
         lhs_1, rel_1, lhs_2, rel_2, rel_3 = self.__get_chains__(chains, graph_type=QuerDAG.TYPE4_3.value)
         emb_dim = chains[0][0].shape[1] // 2
         all_heads_embs = all_nodes_embs[:, :emb_dim]
@@ -761,7 +762,7 @@ class KBCModel(nn.Module, ABC):
 
             scores = scores1 + scores2
 
-            return scores
+        return scores
         
 
     def optimize_4_3(self, chains: List, regularizer: Regularizer,

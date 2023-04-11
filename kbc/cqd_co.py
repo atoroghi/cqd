@@ -24,11 +24,15 @@ def score_queries(args):
 
     data_hard = pickle.load(open(data_hard_path, 'rb'))
     data_complete = pickle.load(open(data_complete_path, 'rb'))
+    valid_heads_path = osp.join(args.path, 'kbc_data','valid_heads.pickle')
+    valid_heads = pickle.load(open(valid_heads_path, 'rb'))
+    valid_tails_path = osp.join(args.path, 'kbc_data','valid_tails.pickle')
+    valid_tails = pickle.load(open(valid_tails_path, 'rb'))
 
     # Instantiate singleton KBC object
-    preload_env(args.model_path, data_hard, args.chain_type, mode='hard')
+    preload_env(args.model_path, data_hard, args.chain_type, mode='hard', valid_heads=valid_heads, valid_tails=valid_tails)
     env = preload_env(args.model_path, data_complete, args.chain_type,
-                      mode='complete')
+                      mode='complete', valid_heads=valid_heads, valid_tails=valid_tails)
     # list of hard queries (queries[0]: 2865_5_-1_-1_63_-1234)
     queries = env.keys_hard
     # a dictionary of the form: {2865_5_-1_-1_63_-1234: [4822, 4398]]}

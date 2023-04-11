@@ -318,6 +318,28 @@ def preload_env(kbc_path, dataset, graph_type, mode="hard", kg_path=None,
 
             chains = [chain1]
             parts = [part1]
+            part1_heads_emb = torch.zeros(chain1[0].shape, device=device)
+            part1_tails_emb = torch.zeros(chain1[0].shape, device=device)
+             
+            for i in range(part1.shape[0]):
+                # gets the relation id
+                rel = int(part1[i][1])
+                # gets the possible heads and tails of it
+                possible_heads = torch.tensor(np.array(valid_heads[rel]).astype('int64') , device=device)
+                # possible tails of this relation should also be possible heads of the rel of the second part of the chain
+                possible_tails = torch.tensor(np.array(valid_tails[rel]).astype('int64'), device=device)
+                possible_heads_embeddings = kbc.model.entity_embeddings(possible_heads)
+                possible_tails_embeddings = kbc.model.entity_embeddings(possible_tails)
+
+                # gets the mean of the heads and tails
+                mean_head = torch.mean(possible_heads_embeddings, dim=0)
+                mean_tail = torch.mean(possible_tails_embeddings, dim=0)
+                part1_heads_emb[i] = mean_head
+                part1_tails_emb[i] = mean_tail
+            possible_heads_emb = [part1_heads_emb]
+            possible_tails_emb = [part1_tails_emb]
+
+
 
         elif QuerDAG.TYPE1_2.value == graph_type:
 
@@ -912,6 +934,7 @@ def preload_env(kbc_path, dataset, graph_type, mode="hard", kg_path=None,
             chains = [chain1,chain2,chain3]
             parts = [part1,part2,part3]
             # from here on, my code for getting the mean of the head and tail for each part
+            device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
             part1_heads_emb = torch.zeros(chain1[0].shape, device=device)
             part1_tails_emb = torch.zeros(chain1[0].shape, device=device)
 
@@ -935,7 +958,7 @@ def preload_env(kbc_path, dataset, graph_type, mode="hard", kg_path=None,
 
             #for part 3:
             part3_heads_emb = part1_tails_emb.clone()
-            part3_tails_emb = torch.zeros(chain3[0].shape, device=device)
+            part3_tails_emb = torch.zeros(chain3[1].shape, device=device)
             for i in range(part3.shape[0]):
                 rel_3 = int(part3[i][1])
                 possible_tails = torch.tensor(np.array(valid_tails[rel_3]).astype('int64'), device=device)
@@ -1030,7 +1053,7 @@ def preload_env(kbc_path, dataset, graph_type, mode="hard", kg_path=None,
 
             #for part 3:
             part3_heads_emb = part1_tails_emb.clone()
-            part3_tails_emb = torch.zeros(chain3[0].shape, device=device)
+            part3_tails_emb = torch.zeros(chain3[1].shape, device=device)
             for i in range(part3.shape[0]):
                 rel_3 = int(part3[i][1])
                 possible_tails = torch.tensor(np.array(valid_tails[rel_3]).astype('int64'), device=device)
