@@ -122,6 +122,8 @@ def score_queries(args):
 
 
 def main(args):
+    print("BPL OPTIMIZATION")
+    print("chain type:", args.chain_type)
     scores, queries, test_ans, test_ans_hard = score_queries(args)
     metrics = evaluation(scores, queries, test_ans, test_ans_hard)
     
