@@ -123,7 +123,12 @@ def score_queries(args):
 
 def main(args):
     print("BPL OPTIMIZATION")
+    print("dataset:", args.dataset)
     print("chain type:", args.chain_type)
+    print("mode:", args.mode)
+    print("cov_anchor:", args.cov_anchor)
+    print("cov_var:", args.cov_var)
+    print("cov_target:", args.cov_target)
     scores, queries, test_ans, test_ans_hard = score_queries(args)
     metrics = evaluation(scores, queries, test_ans, test_ans_hard)
     
