@@ -320,11 +320,13 @@ class KBCModel(nn.Module, ABC):
             lhs_1, rel_1, rel_2 = self.__get_chains__(chains, graph_type=QuerDAG.TYPE1_2.value)
             # update the precision and information of the variable given the anchor
             # when updating m given d, we should use the tail embedding of d
-            mu_d_for = lhs_1[:, emb_dim:] * rel_1[:, :emb_dim]
+            #mu_d_for = lhs_1[:, emb_dim:] * rel_1[:, :emb_dim]
+            mu_d_for = lhs_1[:, :emb_dim] * rel_1[:, :emb_dim]
             h_d_for = (1/cov_anchor) * mu_d_for
             h_m_for = h_m_for + h_d_for
             J_m_for = (1/cov_anchor) + (1/cov_var)
-            mu_d_inv = lhs_1[:, :emb_dim] * rel_1[:, emb_dim:]
+            #mu_d_inv = lhs_1[:, :emb_dim] * rel_1[:, emb_dim:]
+            mu_d_inv = lhs_1[:, emb_dim:] * rel_1[:, emb_dim:]
             h_d_inv = (1/cov_anchor) * mu_d_inv
             h_m_inv = h_m_inv + h_d_inv
             J_m_inv = (1/cov_anchor) + (1/cov_var)
