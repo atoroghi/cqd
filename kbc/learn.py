@@ -5,7 +5,7 @@
 # LICENSE file in the root directory of this source tree.
 #
 
-import os
+import os, sys
 import json
 import time
 import argparse
@@ -114,10 +114,13 @@ def kbc_model_load(model_path):
 		dataset_name = 'FB15k-237'
 	if 'NELL' in identifiers:
 		dataset_name = 'NELL'
-	if 'FB15k' in identifiers:
+	if 'FB15k' in identifiers and not '237' in identifiers:
 		dataset_name = 'FB15k'
 
 	model_dir = os.path.dirname(model_path)
+
+    
+
 
 	with open(os.path.join(model_dir, f'{dataset_name}-metadata-{timestamp}.json'), 'r') as json_file:
 		metadata = json.load(json_file)
@@ -155,6 +158,7 @@ def kbc_model_load(model_path):
 	loss = checkpoint['loss']
 
 	print(KBC_optimizer.model.eval())
+	
 
 	return KBC_optimizer, epoch, loss
 
