@@ -112,6 +112,10 @@ def kbc_model_load(model_path):
 		dataset_name = "YAGO3-10"
 	if 'FB15k' and '237' in identifiers:
 		dataset_name = 'FB15k-237'
+	if 'NELL' in identifiers:
+		dataset_name = 'NELL'
+	if 'FB15k' in identifiers:
+		dataset_name = 'FB15k'
 
 	model_dir = os.path.dirname(model_path)
 
