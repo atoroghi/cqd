@@ -1,5 +1,4 @@
-#%%
-#%%
+#%%  
 import os, pickle, sys, time
 import torch
 import numpy as np
@@ -8,7 +7,7 @@ import tqdm
 import pandas as pd
 from sklearn.model_selection import train_test_split
 from collections import defaultdict
-
+import re
 #%%
 def seed_everything(seed: int):
     random.seed(seed)
@@ -35,98 +34,99 @@ def split_kg(kg, split = 0.2):
     kg_test = kg_test[np.isin(kg_test[:, 0], kg_train[:, 0])]
     kg_test = kg_test[np.isin(kg_test[:, 2], kg_train[:, 2])]
     return kg_train , kg_test
-#%%
-#dataset = 'amazon-book'
-dataset = 'yelp2018'
+    
+    
+    
+    
+    
+    
+#%%   
+dataset = 'Movielens'
 from pathlib import Path
 import pickle
 path = os.path.join(os.getcwd() ,'..', 'data', dataset)
 root = Path(path)
 print(root)
 print(os.listdir(root))
-# %%
-kg_list = []
-with open(path + '/kg_final.txt') as f:
-    for line in tqdm.tqdm(f):
-        line = line.strip('\n').split(' ')
-        kg_list.append([int(line[0]), int(line[1]), int(line[2])])
-
-kg = np.array(kg_list).astype(np.uint32)
+#%%
+kg_path = os.path.join(root, 'kg/train.dat')
+rec_path = os.path.join(root,'rs/ratings.txt')
+kg = np.genfromtxt(kg_path, delimiter='\t', dtype=np.int32)
+rec = np.genfromtxt(rec_path, delimiter='\t', dtype=np.int32)
+#%%
 n_e = len(set(kg[:, 0]) | set(kg[:, 2]))
 print("number of entities: ", n_e)
 n_r = len(set(kg[:, 1]))
 print("number of relations: ", n_r)
-# count number of unique entities and relations
-# %%
-likes_rel = n_r
-rec_train_dict = {}
-with open(path + '/train.txt') as f:
+
+rec = rec[:,:3] # remove time col.
+rec[:,2] = rec[:,2] >= 4 # binary ratings, 0 if [0, 4), 1 if [4, 5] 
+rec = rec[rec[:,2] == 1] # select only positive ratings
+rec[:,2] = n_r # set redundant col to the last relationship
+
+rec = rec[:, [0,2,1]]
+#%%
+
+# kg entities and relations are from 0 to n indexed
+# we need to map the items to the same kg entities and offset the user ids
+
+# for this, we need e_map that maps each entity id to its FB id and i2kg_map.tsv that maps items to kg entities in FB id
+
+item2kg_path = os.path.join(root,'rs/i2kg_map.tsv')
+emap_path = os.path.join(root,'kg/e_map.dat')
+
+# maps movie lense id's to free base html links
+ml2fb_map = {}
+with open(item2kg_path) as f:
     for line in f:
-        line = line.strip('\n').split(' ')
-        rec_train_dict[int(line[0])] = set([int(x) for x in line[1:]])
-
-rec_train_list = []
-for key in rec_train_dict.keys():
-    for val in rec_train_dict[key]:
-        rec_train_list.append([key, likes_rel, val])
+        ml_id = re.search('(.+?)\t', line)
+        fb_http = re.search('\t(.+?)\n', line)
+        ml2fb_map.update({int(ml_id.group(1)) : fb_http.group(1)})
 
 
-rec_test_list = []
-rec_test_dict = {}
-with open(path + '/test.txt') as f:
+#%%
+# maps free base html links to free base id's (final format)
+id2html_map = {}
+fb2id_map = {}
+with open(emap_path) as f:
+    for kg_id, line in enumerate(f):
+        fb_http = re.search('\t(.+?)\n', line)
+        fb2id_map.update({fb_http.group(1) : kg_id})
+        id2html_map.update({kg_id : fb_http.group(1)})
+
+#%%
+# convert movielens id's to freebase id's
+i = 0
+while True:
+    if i == rec.shape[0]:
+        break
+    if rec[i,2] in ml2fb_map: 
+        # get correct freebase id from data
+        fb_http = ml2fb_map[rec[i,2]]
+        fb_id = fb2id_map[fb_http]
+        rec[i,2] = fb_id
+        i += 1
+    # remove from rec (only use movies that are in kg)
+    else:
+        rec = np.delete(rec, i, axis=0)
+
+#%%
+
+umap_path = os.path.join(root, 'rs/u_map.dat')
+
+# maps movielens user id's to freebase id's
+userid2fbid_map = {}
+new_ids = 0
+with open(umap_path) as f:
     for line in f:
-        line = line.strip('\n').split(' ')
-        try:
-            rec_test_dict[int(line[0])] = set([int(x) for x in line[1:]])
-        except:
-            pass
-
-for key in rec_test_dict.keys():
-    for val in rec_test_dict[key]:
-        rec_test_list.append([key, likes_rel, val])
-
-rec_train = np.array(rec_train_list).astype(np.uint32)
-rec_test = np.array(rec_test_list).astype(np.uint32)
-rec = np.concatenate((rec_train, rec_test), axis = 0)
-
-#offset the users_ids by the number of entities
-rec[:, 0] += n_e
-
-
-# %%
-# change the relations number and add reverse relations
-#kg_new = np.zeros((2*kg.shape[0], 3)).astype(np.uint32)
-#for i, row in enumerate(kg):
-#    # Extract values from row1
-#    val0, val1, val2 = row
-#    # Create new row1 (0->0, 1->2, 2->4)
-#    row1 = np.array([val0, 2*val1, val2])
-#    # Create new row2 (the reverse relation (0_rev -> 1, 1_rev -> 3, 2_rev -> 5))
-#    row2 = np.array([val2, 1+2*val1, val0])
-#    # Add row1 and row2 to kg_new
-#    kg_new[i*2] = row1
-#    kg_new[i*2+1] = row2
-## %%
-## change the relations number and add reverse relations
-#rec_new = np.zeros((2*rec.shape[0], 3)).astype(np.uint32)
-#for i, row in enumerate(rec):
-#    # Extract values from row1
-#    val0, val1, val2 = row
-#    # Create new row1 (0->0, 1->2, 2->4)
-#    row1 = np.array([val0, 2*val1, val2])
-#    # Create new row2 (the reverse relation (0_rev -> 1, 1_rev -> 3, 2_rev -> 5))
-#    row2 = np.array([val2, 1+2*val1, val0])
-#    # Add row1 and row2 to kg_new
-#    rec_new[i*2] = row1
-#    rec_new[i*2+1] = row2
-
-#rec_train, rec_testval = split_kg(rec_new, split = 0.2)
-#
-#rec_test, rec_valid = train_test_split(rec_testval, test_size=0.5)
-## split the rec data into train, val and test
-#
-#kg_train, kg_val = split_kg(kg_new, split = 0.2)
-
+        ml_id = re.search('\t(.+?)\n', line)
+        if int(ml_id.group(1)) in rec[:,0]:
+            new_ids += 1
+            userid2fbid_map.update({int(ml_id.group(1)) : n_e + new_ids})
+# convert movielens user id's into freebase id's
+for i in range(rec.shape[0]):
+    rec[i,0] = userid2fbid_map[rec[i,0]]
+NEW_USER_IDS = new_ids
 
 # %%
 rec_train, rec_testval = split_kg(rec, split = 0.3)
@@ -137,19 +137,16 @@ rec_test, rec_valid = train_test_split(rec_testval, test_size=0.5)
 kg_train, kg_testval = split_kg(kg, split = 0.3)
 kg_test, kg_val = train_test_split(kg_testval, test_size=0.5)
 
-
-
-
 # %%
-
 train = np.concatenate((rec_train, kg_train), axis = 0)
 valid = np.concatenate((kg_val, rec_valid), axis = 0)
 test = np.concatenate((rec_test, kg_test), axis = 0)
-# %%
+
 # delete rows of users in the test set that are not in the train set
 test = test[np.isin(test[:, 0], train[:, 0])]
-# %%
+
 valid = valid[np.isin(valid[:, 0], train[:, 0])]
+
 # %%
 # write the train, valid and test data to txt.pickle files
 with open(path + '/train.txt.pickle', 'wb') as f:
@@ -158,15 +155,7 @@ with open(path + '/valid.txt.pickle', 'wb') as f:
     pickle.dump(valid, f)
 with open(path + '/test.txt.pickle', 'wb') as f:
     pickle.dump(test, f)
-# %%
-# load the train, valid and test txt.pickle files
-with open(path + '/train.txt.pickle', 'rb') as f:
-    train_loaded = pickle.load(f)
-with open(path + '/valid.txt.pickle', 'rb') as f:
-    valid_loaded = pickle.load(f)
-with open(path + '/test.txt.pickle', 'rb') as f:
-    test_loaded = pickle.load(f)
-# %%
+
 # %%
 files = ['train.txt.pickle', 'valid.txt.pickle', 'test.txt.pickle']
 entities, relations = set(), set()
@@ -192,7 +181,6 @@ print(f'{n_entities} entities and {n_relations} relations')
 # %%
 for (dic, f) in zip([entities_to_id, relations_to_id], ['ent_id', 'rel_id']):
     pickle.dump(dic, open(os.path.join(path, f'{f}.pickle'), 'wb'))
-
 
 # %%
 to_skip = {'lhs': defaultdict(set), 'rhs': defaultdict(set)}
@@ -232,16 +220,6 @@ for kk, skip in to_skip.items():
 out = open(os.path.join(path, 'new_to_skip.pickle'), 'wb')
 pickle.dump(to_skip_final, out)
 out.close()
-
-
-
-
-
-
-
-
-
-
 # %%
 # forming the type checking dictionaries
 all_data = np.concatenate((train, test, valid), axis = 0)
@@ -273,95 +251,3 @@ out_file = open(path + '/valid_tails.pickle', 'wb')
 pickle.dump(valid_tails, out_file)
 out_file.close()
 # %%
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-# making the rel_id, ent_id, and to_skip dictionaries
-all_data = np.concatenate((train, test, valid), axis = 0)
-rel_id = {}
-ent_id = {}
-to_skip = {}
-
-for line in all_data:
-    if line[1] not in rel_id:
-        rel_id[line[1]] = line[1]
-    if line[0] not in ent_id:
-        ent_id[line[0]] = line[0]
-    if line[2] not in ent_id:
-        ent_id[line[2]] = line[2]
-
-#with open(path + '/entity_list.txt') as f:
-#    for line in f:
-#        #skip the first line
-#        if line[0] != 'm':
-#            continue
-#        line = line.strip('\n').split(' ')
-#        ent_id[line[0]] = line[0]
-#
-#with open(path + '/relation_list.txt') as f:
-#    for line in f:
-#        #skip the first line
-#        if line[0] != 'h':
-#            continue
-#        line = line.strip('\n').split(' ')
-#        rel_id[line[0]] = line[0]
-
-
-# %%
-out_file = open(path + '/ent_id.pickle', 'wb')
-pickle.dump(ent_id, out_file)
-out_file.close()
-
-out_file = open(path + '/rel_id.pickle', 'wb')
-pickle.dump(rel_id, out_file)
-out_file.close()
-# %%
-# map train/test/valid with the ids
-to_skip = {'lhs': defaultdict(set), 'rhs': defaultdict(set)}
-files = [train, valid, test]
-
-for f in files:
-    for line in f:
-        lhs, rel, rhs = line[0], line[1], line[2]
-        to_skip['rhs'][(lhs, rel)].add(rhs)
-        to_skip['lhs'][(rhs, rel)].add(lhs)
-
-to_skip_final = {'lhs': {}, 'rhs': {}}
-for kk, skip in to_skip.items():
-    for k, v in skip.items():
-        to_skip_final[kk][k] = sorted(list(v))
-out = open(os.path.join(path , 'to_skip.pickle'), 'wb')
-pickle.dump(to_skip_final, out)
-out.close()
-# %%
-
-
-
-
-
-
-
-
-# %%
-# After running till line 106 (for training on the BCIE KG trainer)
-
