@@ -29,7 +29,8 @@ def run(kbc_path, dataset_hard, dataset_name, t_norm='min', candidates=3,
     experiments.remove(QuerDAG.TYPE2_2.value)
     experiments.remove(QuerDAG.TYPE2_2_disj.value)
     experiments.remove(QuerDAG.TYPE1_3.value)
-    #experiments.remove(QuerDAG.TYPE2_3.value)
+    experiments.remove(QuerDAG.TYPE1_4.value)
+    experiments.remove(QuerDAG.TYPE2_3.value)
     experiments.remove(QuerDAG.TYPE3_3.value)
     experiments.remove(QuerDAG.TYPE4_3.value)
     experiments.remove(QuerDAG.TYPE4_3_disj.value)
@@ -105,7 +106,7 @@ if __name__ == "__main__":
     datasets = big_datasets
     dataset_modes = ['valid', 'test', 'train']
 
-    chain_types = [QuerDAG.TYPE1_1.value, QuerDAG.TYPE1_2.value, QuerDAG.TYPE2_2.value, QuerDAG.TYPE1_3.value,
+    chain_types = [QuerDAG.TYPE1_1.value, QuerDAG.TYPE1_2.value, QuerDAG.TYPE2_2.value, QuerDAG.TYPE1_3.value,QuerDAG.TYPE1_4.value,
                    QuerDAG.TYPE1_3_joint.value, QuerDAG.TYPE2_3.value, QuerDAG.TYPE3_3.value, QuerDAG.TYPE4_3.value,
                    'All', 'e']
 
@@ -181,6 +182,7 @@ if __name__ == "__main__":
     ent_id = pickle.load(open(osp.join(args.path, 'ent_id.pickle'), 'rb'))
     rel_id = pickle.load(open(osp.join(args.path, 'rel_id.pickle'), 'rb'))
     non_items_array = np.load(osp.join(args.path, 'non_items_array.npy'))
+
 
     print("Beam:")
 

@@ -159,6 +159,7 @@ class QuerDAG(enum.Enum):
     TYPE2_2 = "2_2"
     TYPE2_2_disj = "2_2_disj"
     TYPE1_3 = "1_3"
+    TYPE1_4 = "1_4"
     TYPE2_3 = "2_3"
     TYPE3_3 = "3_3"
     TYPE4_3 = "4_3"
@@ -518,9 +519,9 @@ def preload_env(kbc_path, dataset, graph_type, mode="complete", kg_path=None,
                 #valid_tails_ent = [ent_id[x] for x in intersect]
                 valid_tails_ent = [x for x in intersect]
                 possible_tails = torch.tensor(np.array(valid_tails_ent).astype('int64'), device=device)
+
                 possible_heads_embeddings = kbc.model.entity_embeddings(possible_heads)
                 possible_tails_embeddings = kbc.model.entity_embeddings(possible_tails)
-
                 # gets the mean of the heads and tails
                 mean_head = torch.mean(possible_heads_embeddings, dim=0)
                 mean_tail = torch.mean(possible_tails_embeddings, dim=0)

@@ -1238,8 +1238,9 @@ class KBCModel(nn.Module, ABC):
                         lhs_2, rel_2, rhs_2 = None, rel_2_emb[i*5+j], rhs_2_emb[i*5+j]
                         ## sanity check
                         #mu_gt = self.entity_embeddings(torch.tensor((intact_part1[i*5+j][2].astype(np.int32))))
-                        #h_gt_for = (1/cov_anchor) * mu_gt[:emb_dim//2] * rel_1[:emb_dim//2]
-                        #h_gt_inv = (1/cov_anchor) * mu_gt[emb_dim//2:] * rel_1[emb_dim//2:]
+                        #h_gt_for = (1/cov_anchor) * mu_gt[:emb_dim//2] * rel_1[emb_dim//2:]
+                        #h_gt_inv = (1/cov_anchor) * mu_gt[emb_dim//2:] * rel_1[:emb_dim//2]
+                        ##print(h_gt_inv)
                         #if j == 0:
                         #    mu_u_for, mu_u_inv = lhs_1[:emb_dim//2], lhs_1[emb_dim//2:]
                         #    h_u_for, h_u_inv = (1/cov_target) * mu_u_for, (1/cov_target) * mu_u_inv
@@ -1249,39 +1250,33 @@ class KBCModel(nn.Module, ABC):
                         #J_u_for = J_u_for + (1/cov_anchor)
                         #J_u_inv = J_u_inv + (1/cov_anchor)
                         #mu_u_for, mu_u_inv = h_u_for / J_u_for, h_u_inv / J_u_inv
+                        ##print(lhs_1)
+                        ##print(h_gt_inv)
+                        ##print(mu_u_for)
+                        ##sys.exit()
                         #user_embs[i*5+j, :emb_dim//2] = mu_u_for
                         #user_embs[i*5+j, emb_dim//2:] = mu_u_inv
 
-
-
                         #print(lhs_1)
                         mu_m_for = possible_tails_emb[0][i*5+j, :emb_dim//2] 
-                        #print(mu_m_for)  
-                        #mu_m_for = 1000*torch.ones(emb_dim//2)                     
                         h_m_for = (1/cov_var) * mu_m_for
                         mu_m_inv = possible_tails_emb[0][i*5+j, emb_dim//2:]
-                        #print(mu_m_inv)
-                        #mu_m_inv = 1000*torch.ones(emb_dim//2) 
                         h_m_inv = (1/cov_var) * mu_m_inv
 
-                        mu_d_for = rhs_2[:emb_dim//2] * rel_2[:emb_dim//2]
+                        mu_d_for = rhs_2[:emb_dim//2] * rel_2[emb_dim//2:]
                         h_d_for = (1/cov_anchor) * mu_d_for
-                        mu_d_inv = rhs_2[emb_dim//2:] * rel_2[emb_dim//2:]
+                        mu_d_inv = rhs_2[emb_dim//2:] * rel_2[:emb_dim//2]
                         h_d_inv = (1/cov_anchor) * mu_d_inv
-                        #print(mu_d_inv)
-                        #print(h_d_inv)
 
                         h_m_for = h_m_for + h_d_inv
                         h_m_inv = h_m_inv + h_d_for
-                        #print(h_m_for)
+                        # #print(h_m_for)
                         
                         J_m_for = (1/cov_anchor) + (1/cov_var)
-                        # mu_m will be useful if you want to do explanation
+                        # # mu_m will be useful if you want to do explanation
                         mu_m_for = h_m_for / J_m_for
                         J_m_inv = (1/cov_anchor) + (1/cov_var)
                         mu_m_inv = h_m_inv / J_m_inv
-                        #print(mu_m_inv)
-                        #print(mu_m_for)
 
                         ## update the precision and information of the target node given the variable
                         if j == 0:
@@ -1301,9 +1296,6 @@ class KBCModel(nn.Module, ABC):
                         J_u_inv = J_u_inv - rel_1[emb_dim//2:] * (1 / J_m_for) * rel_1[emb_dim//2:]
                         mu_u_for = h_u_for / J_u_for
                         mu_u_inv = h_u_inv / J_u_inv
-                        #print(h_u_for)
-                        #print(mu_u_for)
-                        #sys.exit()
                      
                         user_embs[i*5+j, :emb_dim//2] = mu_u_for
                         user_embs[i*5+j, emb_dim//2:] = mu_u_inv
@@ -1313,6 +1305,132 @@ class KBCModel(nn.Module, ABC):
 
                 # once we have the user embeddings for each query, we can calculate the recommendation scores
                 scores = self.forward_emb(user_embs, rel_1_emb)
+
+        elif env.graph_type == '1_3':
+            part1 , part2, part3 = parts[0], parts[1], parts[2]
+            intact_part1, intact_part2, intact_part3 = intact_parts[0], intact_parts[1], intact_parts[2]
+            chain1, chain2, chain3 = chains[0], chains[1], chains[2]
+            lhs_1_emb, rel_1_emb, rhs_1_emb, lhs_2_emb, rel_2_emb, rhs_2_emb, lhs_3_emb, rel_3_emb, rhs_3_emb = chain1[0], chain1[1], chain1[2], chain2[0], chain2[1], chain2[2], chain3[0], chain3[1], chain3[2]
+            if not 'SimplE' in str(self.model_type):
+                raise NotImplementedError
+            else:
+                for i in tqdm.tqdm(range(nb_queries // 5)):
+                    for j in range(5):
+                        lhs_1, rel_1, rhs_1 = lhs_1_emb[i*5+j], rel_1_emb[i*5+j], None
+                        lhs_2, rel_2, rhs_2 = None, rel_2_emb[i*5+j], None
+                        lhs_3, rel_3, rhs_3 = None, rel_3_emb[i*5+j], rhs_3_emb[i*5+j]
+                        mu_m2_for = possible_tails_emb[1][i*5+j, :emb_dim//2]
+                        h_m2_for = (1/cov_var) * mu_m2_for
+                        mu_m2_inv = possible_tails_emb[1][i*5+j, emb_dim//2:]
+                        h_m2_inv = (1/cov_var) * mu_m2_inv
+                        mu_d_for = rhs_3[:emb_dim//2] * rel_3[emb_dim//2:]
+                        h_d_for = (1/cov_anchor) * mu_d_for
+                        mu_d_inv = rhs_3[emb_dim//2:] * rel_3[:emb_dim//2]
+                        h_d_inv = (1/cov_anchor) * mu_d_inv
+                        h_m2_for = h_m2_for + h_d_inv; h_m2_inv = h_m2_inv + h_d_for
+                        J_m2_for = (1/cov_anchor) + (1/cov_var); J_m2_inv = (1/cov_anchor) + (1/cov_var)
+                        mu_m2_for = h_m2_for / J_m2_for; mu_m2_inv = h_m2_inv / J_m2_inv
+
+                        mu_m1_for = possible_tails_emb[0][i*5+j, :emb_dim//2]
+                        h_m1_for = (1/cov_var) * mu_m1_for
+                        mu_m1_inv = possible_tails_emb[0][i*5+j, emb_dim//2:]
+                        h_m1_inv = (1/cov_var) * mu_m1_inv
+                        # h_m1_for = h_m1_for + h_m2_inv; h_m1_inv = h_m1_inv + h_m2_for
+                        # # check this
+                        # J_m1_for = (1/cov_var) +  J_m2_for
+                        # J_m1_inv = (1/cov_var) + J_m2_inv
+                        # mu_m1_for = h_m1_for / J_m1_for; mu_m1_inv = h_m1_inv / J_m1_inv
+                        h_m1_for = h_m1_for - rel_2[:emb_dim//2] * (1 / J_m2_inv) * h_m2_inv
+                        J_m1_for = (1/cov_var) - rel_2[:emb_dim//2] * (1 / J_m2_inv) * rel_2[:emb_dim//2]
+                        h_m1_inv = h_m1_inv - rel_2[emb_dim//2:] * (1 / J_m2_for) * h_m2_for
+                        J_m1_inv = (1/cov_var) - rel_2[emb_dim//2:] * (1 / J_m2_for) * rel_2[emb_dim//2:]
+                        mu_m1_for = h_m1_for / J_m1_for; mu_m1_inv = h_m1_inv / J_m1_inv
+
+                        if j == 0:
+                            mu_u = lhs_1
+                            mu_u_for = mu_u[:emb_dim//2]
+                            mu_u_inv = mu_u[emb_dim//2:]
+                            h_u_for = (1/cov_target) * mu_u_for
+                            h_u_inv = (1/cov_target) * mu_u_inv
+                            J_u_for = (1/cov_target)
+                            J_u_inv = (1/cov_target)
+                        
+                        h_u_for = h_u_for - rel_1[:emb_dim//2] * (1 / J_m1_inv) * h_m1_inv
+                        J_u_for = J_u_for - rel_1[:emb_dim//2] * (1 / J_m1_inv) * rel_1[:emb_dim//2]
+                        h_u_inv = h_u_inv - rel_1[emb_dim//2:] * (1 / J_m1_for) * h_m1_for
+                        J_u_inv = J_u_inv - rel_1[emb_dim//2:] * (1 / J_m1_for) * rel_1[emb_dim//2:]
+                        mu_u_for = h_u_for / J_u_for
+                        mu_u_inv = h_u_inv / J_u_inv
+                        user_embs[i*5+j, :emb_dim//2] = mu_u_for
+                        user_embs[i*5+j, emb_dim//2:] = mu_u_inv
+                scores = self.forward_emb(user_embs, rel_1_emb)
+        elif env.graph_type == '1_4':
+            part1 , part2, part3, part4 = parts[0], parts[1], parts[2], parts[3]
+            intact_part1, intact_part2, intact_part3, intact_part4 = intact_parts[0], intact_parts[1], intact_parts[2], intact_parts[3]
+            chain1, chain2, chain3, chain4 = chains[0], chains[1], chains[2], chains[3]
+            lhs_1_emb, rel_1_emb, rhs_1_emb, lhs_2_emb, rel_2_emb, rhs_2_emb, lhs_3_emb, rel_3_emb, rhs_3_emb, lhs_4_emb, rel_4_emb, rhs_4_emb = chain1[0], chain1[1], chain1[2], chain2[0], chain2[1], chain2[2], chain3[0], chain3[1], chain3[2], chain4[0], chain4[1], chain4[2]
+            if not 'SimplE' in str(self.model_type):
+                raise NotImplementedError
+            else:
+                for i in tqdm.tqdm(range(nb_queries // 5)):
+                    for j in range(5):
+                        lhs_1, rel_1, rhs_1 = lhs_1_emb[i*5+j], rel_1_emb[i*5+j], None
+                        lhs_2, rel_2, rhs_2 = None, rel_2_emb[i*5+j], None
+                        lhs_3, rel_3, rhs_3 = None, rel_3_emb[i*5+j], None
+                        lhs_4, rel_4, rhs_4 = None, rel_4_emb[i*5+j], rhs_4_emb[i*5+j]
+                        mu_m3_for = possible_tails_emb[2][i*5+j, :emb_dim//2]
+                        h_m3_for = (1/cov_var) * mu_m3_for
+                        mu_m3_inv = possible_tails_emb[2][i*5+j, emb_dim//2:]
+                        h_m3_inv = (1/cov_var) * mu_m3_inv
+                        mu_d_for = rhs_4[:emb_dim//2] * rel_4[emb_dim//2:]
+                        h_d_for = (1/cov_anchor) * mu_d_for
+                        mu_d_inv = rhs_4[emb_dim//2:] * rel_4[:emb_dim//2]
+                        h_d_inv = (1/cov_anchor) * mu_d_inv
+                        h_m3_for = h_m3_for + h_d_inv; h_m3_inv = h_m3_inv + h_d_for
+                        J_m3_for = (1/cov_anchor) + (1/cov_var); J_m3_inv = (1/cov_anchor) + (1/cov_var)
+                        mu_m3_for = h_m3_for / J_m3_for; mu_m3_inv = h_m3_inv / J_m3_inv
+
+                        mu_m2_for = possible_tails_emb[1][i*5+j, :emb_dim//2]
+                        h_m2_for = (1/cov_var) * mu_m2_for
+                        mu_m2_inv = possible_tails_emb[1][i*5+j, emb_dim//2:]
+                        h_m2_inv = (1/cov_var) * mu_m2_inv
+
+                        h_m2_for = h_m2_for - rel_3[:emb_dim//2] * (1 / J_m3_inv) * h_m3_inv
+                        J_m2_for = (1/cov_var) - rel_3[:emb_dim//2] * (1 / J_m3_inv) * rel_3[:emb_dim//2]
+                        h_m2_inv = h_m2_inv - rel_3[emb_dim//2:] * (1 / J_m3_for) * h_m3_for
+                        J_m2_inv = (1/cov_var) - rel_3[emb_dim//2:] * (1 / J_m3_for) * rel_3[emb_dim//2:]
+                        mu_m2_for = h_m2_for / J_m2_for; mu_m2_inv = h_m2_inv / J_m2_inv
+
+                        mu_m1_for = possible_tails_emb[0][i*5+j, :emb_dim//2]
+                        h_m1_for = (1/cov_var) * mu_m1_for
+                        mu_m1_inv = possible_tails_emb[0][i*5+j, emb_dim//2:]
+                        h_m1_inv = (1/cov_var) * mu_m1_inv
+                        h_m1_for = h_m1_for - rel_2[:emb_dim//2] * (1 / J_m2_inv) * h_m2_inv
+                        J_m1_for = (1/cov_var) - rel_2[:emb_dim//2] * (1 / J_m2_inv) * rel_2[:emb_dim//2]
+                        h_m1_inv = h_m1_inv - rel_2[emb_dim//2:] * (1 / J_m2_for) * h_m2_for
+                        J_m1_inv = (1/cov_var) - rel_2[emb_dim//2:] * (1 / J_m2_for) * rel_2[emb_dim//2:]
+                        mu_m1_for = h_m1_for / J_m1_for; mu_m1_inv = h_m1_inv / J_m1_inv
+
+                        if j == 0:
+                            mu_u = lhs_1
+                            mu_u_for = mu_u[:emb_dim//2]
+                            mu_u_inv = mu_u[emb_dim//2:]
+                            h_u_for = (1/cov_target) * mu_u_for
+                            h_u_inv = (1/cov_target) * mu_u_inv
+                            J_u_for = (1/cov_target)
+                            J_u_inv = (1/cov_target)
+                        
+                        h_u_for = h_u_for - rel_1[:emb_dim//2] * (1 / J_m1_inv) * h_m1_inv
+                        J_u_for = J_u_for - rel_1[:emb_dim//2] * (1 / J_m1_inv) * rel_1[:emb_dim//2]
+                        h_u_inv = h_u_inv - rel_1[emb_dim//2:] * (1 / J_m1_for) * h_m1_for
+                        J_u_inv = J_u_inv - rel_1[emb_dim//2:] * (1 / J_m1_for) * rel_1[emb_dim//2:]
+                        mu_u_for = h_u_for / J_u_for
+                        mu_u_inv = h_u_inv / J_u_inv
+                        user_embs[i*5+j, :emb_dim//2] = mu_u_for
+                        user_embs[i*5+j, emb_dim//2:] = mu_u_inv
+                scores = self.forward_emb(user_embs, rel_1_emb)
+
+
 
         elif env.graph_type == '2_2':
             part1, part2, part3 = parts[0], parts[1], parts[2]
@@ -1334,13 +1452,13 @@ class KBCModel(nn.Module, ABC):
                         mu_m_inv = possible_tails_emb[0][i*5+j, emb_dim//2:]
                         h_m_inv = (1/cov_var) * mu_m_inv
 
-                        mu_d_for1 = rhs_2[:emb_dim//2] * rel_2[:emb_dim//2]
+                        mu_d_for1 = rhs_2[:emb_dim//2] * rel_2[emb_dim//2:]
                         h_d_for1 = (1/cov_anchor) * mu_d_for1
-                        mu_d_inv1 = rhs_2[emb_dim//2:] * rel_2[emb_dim//2:]
+                        mu_d_inv1 = rhs_2[emb_dim//2:] * rel_2[:emb_dim//2]
                         h_d_inv1 = (1/cov_anchor) * mu_d_inv1
-                        mu_d_for2 = rhs_3[:emb_dim//2] * rel_3[:emb_dim//2]
+                        mu_d_for2 = rhs_3[:emb_dim//2] * rel_3[emb_dim//2:]
                         h_d_for2 = (1/cov_anchor) * mu_d_for2
-                        mu_d_inv2 = rhs_3[emb_dim//2:] * rel_3[emb_dim//2:]
+                        mu_d_inv2 = rhs_3[emb_dim//2:] * rel_3[:emb_dim//2]
                         h_d_inv2 = (1/cov_anchor) * mu_d_inv2
 
                         h_m_for = h_m_for + h_d_inv1 + h_d_inv2
@@ -1396,40 +1514,33 @@ class KBCModel(nn.Module, ABC):
                         lhs_4, rel_4, rhs_4 = None, rel_4_emb[i*5+j], rhs_4_emb[i*5+j]
 
                         mu_m_for = possible_tails_emb[0][i*5+j, :emb_dim//2]
-                        #mu_m_for = 1000*torch.ones(emb_dim//2)
-
                         h_m_for = (1/cov_var) * mu_m_for
-                        #print(h_m_for)
-                        mu_m_inv = possible_tails_emb[0][i*5+j, emb_dim//2:]
-                        #mu_m_inv = 1000*torch.ones(emb_dim//2)
-                        h_m_inv = (1/cov_var) * mu_m_inv
-                        #print(h_m_inv)
 
-                        mu_d_for1 = rhs_2[:emb_dim//2] * rel_2[:emb_dim//2]
+                        mu_m_inv = possible_tails_emb[0][i*5+j, emb_dim//2:]
+                        h_m_inv = (1/cov_var) * mu_m_inv
+
+                        mu_d_for1 = rhs_2[:emb_dim//2] * rel_2[emb_dim//2:]
                         h_d_for1 = (1/cov_anchor) * mu_d_for1
 
-                        mu_d_inv1 = rhs_2[emb_dim//2:] * rel_2[emb_dim//2:]
-                        #print(mu_d_inv1)
+                        mu_d_inv1 = rhs_2[emb_dim//2:] * rel_2[:emb_dim//2]
                         h_d_inv1 = (1/cov_anchor) * mu_d_inv1
-                        #print(h_d_inv1)
-                        mu_d_for2 = rhs_3[:emb_dim//2] * rel_3[:emb_dim//2]
+
+                        mu_d_for2 = rhs_3[:emb_dim//2] * rel_3[emb_dim//2:]
                         h_d_for2 = (1/cov_anchor) * mu_d_for2
-                        mu_d_inv2 = rhs_3[emb_dim//2:] * rel_3[emb_dim//2:]
+                        mu_d_inv2 = rhs_3[emb_dim//2:] * rel_3[:emb_dim//2]
                         h_d_inv2 = (1/cov_anchor) * mu_d_inv2
-                        mu_d_for3 = rhs_4[:emb_dim//2] * rel_4[:emb_dim//2]
+                        mu_d_for3 = rhs_4[:emb_dim//2] * rel_4[emb_dim//2:]
                         h_d_for3 = (1/cov_anchor) * mu_d_for3
-                        mu_d_inv3 = rhs_4[emb_dim//2:] * rel_4[emb_dim//2:]
+                        mu_d_inv3 = rhs_4[emb_dim//2:] * rel_4[:emb_dim//2]
                         h_d_inv3 = (1/cov_anchor) * mu_d_inv3
 
                         h_m_for = h_m_for + h_d_inv1 + h_d_inv2 + h_d_inv3
-                        #print(h_m_for)
-                        #sys.exit()
+
                         J_m_for = (1/cov_var) + (1/cov_anchor) + (1/cov_anchor) + (1/cov_anchor)
                         h_m_inv = h_m_inv + h_d_for1 + h_d_for2 + h_d_for3
                         J_m_inv = (1/cov_var) + (1/cov_anchor) + (1/cov_anchor) + (1/cov_anchor)
                         mu_m_for = h_m_for / J_m_for
                         mu_m_inv = h_m_inv / J_m_inv
-                        #print(h_m_inv)
 
                         # update user belief
                         if j==0:
@@ -1440,23 +1551,151 @@ class KBCModel(nn.Module, ABC):
                             h_u_inv = (1/cov_target) * mu_u_inv
                             J_u_for = (1/cov_target)
                             J_u_inv = (1/cov_target)
-                            #print(mu_u_for)
-                        #print(h_u_for)
+
                         h_u_for = h_u_for - rel_1[:emb_dim//2] * (1 / J_m_inv) * h_m_inv
-                        #print(h_u_for)
-                        #sys.exit()
+
                         J_u_for = J_u_for - rel_1[:emb_dim//2] * (1 / J_m_inv) * rel_1[:emb_dim//2]
                         h_u_inv = h_u_inv - rel_1[emb_dim//2:] * (1 / J_m_for) * h_m_for
                         J_u_inv = J_u_inv - rel_1[emb_dim//2:] * (1 / J_m_for) * rel_1[emb_dim//2:]
 
                         mu_u_for = h_u_for / J_u_for
                         mu_u_inv = h_u_inv / J_u_inv
-                        #print(mu_u_for)
-                        #sys.exit()
+
 
                         user_embs[i*5+j, :emb_dim//2] = mu_u_for
                         user_embs[i*5+j, emb_dim//2:] = mu_u_inv
                 scores = self.forward_emb(user_embs, rel_1_emb)
+        
+        elif env.graph_type == '3_3': # pi
+            part1, part2, part3, part4 = parts[0], parts[1], parts[2], parts[3]
+            chain1, chain2, chain3, chain4 = chains[0], chains[1], chains[2], chains[3]
+            lhs_1_emb, rel_1_emb, rhs_1_emb, lhs_2_emb, rel_2_emb, rhs_2_emb, lhs_3_emb, rel_3_emb, rhs_3_emb, lhs_4_emb, rel_4_emb, rhs_4_emb = \
+                chain1[0], chain1[1], chain1[2], chain2[0], chain2[1], chain2[2], chain3[0], chain3[1], chain3[2], chain4[0], chain4[1], chain4[2]
+            #print(lhs_1_emb[0])
+            if not 'SimplE' in str(self.model_type):
+                raise NotImplementedError
+            else:
+                for i in tqdm.tqdm(range(nb_queries // 5)):
+                    for j in range(5):
+                        lhs_1, rel_1, rhs_1 = lhs_1_emb[i*5+j], rel_1_emb[i*5+j], None
+                        lhs_2, rel_2, rhs_2 = None, rel_2_emb[i*5+j], rhs_2_emb[i*5+j]
+                        lhs_3, rel_3, rhs_3 = None, rel_3_emb[i*5+j], None
+                        lhs_4, rel_4, rhs_4 = None, rel_4_emb[i*5+j], rhs_4_emb[i*5+j]
+
+                        mu_m2_for = possible_tails_emb[2][i*5+j, :emb_dim//2]
+                        h_m2_for = (1/cov_var) * mu_m2_for
+                        mu_m2_inv = possible_tails_emb[2][i*5+j, emb_dim//2:]
+                        h_m2_inv = (1/cov_var) * mu_m2_inv
+                        mu_d2_for = rhs_4[:emb_dim//2] * rel_4[emb_dim//2:]
+                        h_d2_for = (1/cov_anchor) * mu_d2_for
+                        mu_d2_inv = rhs_4[emb_dim//2:] * rel_4[:emb_dim//2]
+                        h_d2_inv = (1/cov_anchor) * mu_d2_inv
+                        h_m2_for = h_m2_for + h_d2_inv; h_m2_inv = h_m2_inv + h_d2_for
+                        J_m2_for = (1/cov_var) + (1/cov_anchor); J_m2_inv = (1/cov_var) + (1/cov_anchor)
+                        mu_m2_for = h_m2_for / J_m2_for; mu_m2_inv = h_m2_inv / J_m2_inv
+
+                        mu_m1_for = possible_tails_emb[0][i*5+j, :emb_dim//2]
+                        h_m1_for = (1/cov_var) * mu_m1_for
+                        mu_m1_inv = possible_tails_emb[0][i*5+j, emb_dim//2:]
+                        h_m1_inv = (1/cov_var) * mu_m1_inv
+                        h_m1_for = h_m1_for - rel_3[:emb_dim//2] * (1 / J_m2_inv) * h_m2_inv
+                        J_m1_for = (1/cov_var) - rel_3[:emb_dim//2] * (1 / J_m2_inv) * rel_3[:emb_dim//2]
+                        h_m1_inv = h_m1_inv - rel_3[emb_dim//2:] * (1 / J_m2_for) * h_m2_for
+                        J_m1_inv = (1/cov_var) - rel_3[emb_dim//2:] * (1 / J_m2_for) * rel_3[emb_dim//2:]
+
+                        mu_d1_for = rhs_2[:emb_dim//2] * rel_2[emb_dim//2:]
+                        h_d1_for = (1/cov_anchor) * mu_d1_for
+                        mu_d1_inv = rhs_2[emb_dim//2:] * rel_2[:emb_dim//2]
+                        h_d1_inv = (1/cov_anchor) * mu_d1_inv
+                        h_m1_for = h_m1_for + h_d1_inv; h_m1_inv = h_m1_inv + h_d1_for
+                        J_m1_for = J_m1_for + (1/cov_anchor); J_m1_inv = J_m1_inv + (1/cov_anchor)
+
+                        if j == 0:
+                            mu_u = lhs_1
+                            mu_u_for = mu_u[:emb_dim//2]
+                            mu_u_inv = mu_u[emb_dim//2:]
+                            h_u_for = (1/cov_target) * mu_u_for
+                            h_u_inv = (1/cov_target) * mu_u_inv
+                            J_u_for = (1/cov_target)
+                            J_u_inv = (1/cov_target)
+
+                        h_u_for = h_u_for - rel_1[:emb_dim//2] * (1 / J_m1_inv) * h_m1_inv
+                        J_u_for = J_u_for - rel_1[:emb_dim//2] * (1 / J_m1_inv) * rel_1[:emb_dim//2]
+                        h_u_inv = h_u_inv - rel_1[emb_dim//2:] * (1 / J_m1_for) * h_m1_for
+                        J_u_inv = J_u_inv - rel_1[emb_dim//2:] * (1 / J_m1_for) * rel_1[emb_dim//2:]
+                        mu_u_for = h_u_for / J_u_for
+                        mu_u_inv = h_u_inv / J_u_inv
+                        user_embs[i*5+j, :emb_dim//2] = mu_u_for
+                        user_embs[i*5+j, emb_dim//2:] = mu_u_inv
+                scores = self.forward_emb(user_embs, rel_1_emb)
+
+
+        elif env.graph_type == '4_3': #ip
+            part1, part2, part3, part4 = parts[0], parts[1], parts[2], parts[3]
+            chain1, chain2, chain3, chain4 = chains[0], chains[1], chains[2], chains[3]
+            lhs_1_emb, rel_1_emb, rhs_1_emb, lhs_2_emb, rel_2_emb, rhs_2_emb, lhs_3_emb, rel_3_emb, rhs_3_emb, lhs_4_emb, rel_4_emb, rhs_4_emb = \
+                chain1[0], chain1[1], chain1[2], chain2[0], chain2[1], chain2[2], chain3[0], chain3[1], chain3[2], chain4[0], chain4[1], chain4[2]
+            if not 'SimplE' in str(self.model_type):
+                raise NotImplementedError
+            else:
+                for i in tqdm.tqdm(range(nb_queries // 5)):
+                    for j in range(5):
+                        lhs_1, rel_1, rhs_1 = lhs_1_emb[i*5+j], rel_1_emb[i*5+j], None
+                        lhs_2, rel_2, rhs_2 = None, rel_2_emb[i*5+j], None
+                        lhs_3, rel_3, rhs_3 = None, rel_3_emb[i*5+j], rhs_3_emb[i*5+j]
+                        lhs_4, rel_4, rhs_4 = None, rel_4_emb[i*5+j], rhs_4_emb[i*5+j]
+
+                        mu_m2_for = possible_tails_emb[1][i*5+j, :emb_dim//2]
+                        h_m2_for = (1/cov_var) * mu_m2_for
+                        mu_m2_inv = possible_tails_emb[1][i*5+j, emb_dim//2:]
+                        h_m2_inv = (1/cov_var) * mu_m2_inv
+
+                        mu_d_for1 = rhs_3[:emb_dim//2] * rel_3[emb_dim//2:]
+                        h_d_for1 = (1/cov_anchor) * mu_d_for1
+                        mu_d_inv1 = rhs_3[emb_dim//2:] * rel_3[:emb_dim//2]
+                        h_d_inv1 = (1/cov_anchor) * mu_d_inv1
+                        mu_d_for2 = rhs_4[:emb_dim//2] * rel_4[emb_dim//2:]
+                        h_d_for2 = (1/cov_anchor) * mu_d_for2
+                        mu_d_inv2 = rhs_4[emb_dim//2:] * rel_4[:emb_dim//2]
+                        h_d_inv2 = (1/cov_anchor) * mu_d_inv2
+
+                        h_m2_for = h_m2_for + h_d_inv1 + h_d_inv2
+                        J_m2_for = (1/cov_var) + (1/cov_anchor) + (1/cov_anchor)
+                        h_m2_inv = h_m2_inv + h_d_for1 + h_d_for2
+                        J_m2_inv = (1/cov_var) + (1/cov_anchor) + (1/cov_anchor)
+                        mu_m2_for = h_m2_for / J_m2_for
+                        mu_m2_inv = h_m2_inv / J_m2_inv
+
+                        mu_m1_for = possible_tails_emb[0][i*5+j, :emb_dim//2]
+                        h_m1_for = (1/cov_var) * mu_m1_for
+                        mu_m1_inv = possible_tails_emb[0][i*5+j, emb_dim//2:]
+                        h_m1_inv = (1/cov_var) * mu_m1_inv
+
+                        h_m1_for = h_m1_for - rel_2[:emb_dim//2] * (1 / J_m2_inv) * h_m2_inv
+                        J_m1_for = (1/cov_var) - rel_2[:emb_dim//2] * (1 / J_m2_inv) * rel_2[:emb_dim//2]
+                        h_m1_inv = h_m1_inv - rel_2[emb_dim//2:] * (1 / J_m2_for) * h_m2_for
+                        J_m1_inv = (1/cov_var) - rel_2[emb_dim//2:] * (1 / J_m2_for) * rel_2[emb_dim//2:]
+                        mu_m1_for = h_m1_for / J_m1_for; mu_m1_inv = h_m1_inv / J_m1_inv
+
+                        if j == 0:
+                            mu_u = lhs_1
+                            mu_u_for = mu_u[:emb_dim//2]
+                            mu_u_inv = mu_u[emb_dim//2:]
+                            h_u_for = (1/cov_target) * mu_u_for
+                            h_u_inv = (1/cov_target) * mu_u_inv
+                            J_u_for = (1/cov_target)
+                            J_u_inv = (1/cov_target)
+                        
+                        h_u_for = h_u_for - rel_1[:emb_dim//2] * (1 / J_m1_inv) * h_m1_inv
+                        J_u_for = J_u_for - rel_1[:emb_dim//2] * (1 / J_m1_inv) * rel_1[:emb_dim//2]
+                        h_u_inv = h_u_inv - rel_1[emb_dim//2:] * (1 / J_m1_for) * h_m1_for
+                        J_u_inv = J_u_inv - rel_1[emb_dim//2:] * (1 / J_m1_for) * rel_1[emb_dim//2:]
+                        mu_u_for = h_u_for / J_u_for
+                        mu_u_inv = h_u_inv / J_u_inv
+                        user_embs[i*5+j, :emb_dim//2] = mu_u_for
+                        user_embs[i*5+j, emb_dim//2:] = mu_u_inv
+                scores = self.forward_emb(user_embs, rel_1_emb)
+
 
         return scores
 
@@ -1505,8 +1744,8 @@ class KBCModel(nn.Module, ABC):
                         J_u_inv = 1/cov_target
                     for ent in instantiated_ents:
                         rhs_1 = self.entity_embeddings(ent)
-                        h_m_for = (1/cov_var) * rhs_1[:emb_dim//2] * rel_1[:emb_dim//2]
-                        h_m_inv = (1/cov_var) * rhs_1[emb_dim//2:] * rel_1[emb_dim//2:]
+                        h_m_for = (1/cov_var) * rhs_1[:emb_dim//2] * rel_1[emb_dim//2:]
+                        h_m_inv = (1/cov_var) * rhs_1[emb_dim//2:] * rel_1[:emb_dim//2]
                         h_u_for = J_u_for * user_belief[:emb_dim//2] + h_m_inv
                         h_u_inv = J_u_inv * user_belief[emb_dim//2:] + h_m_for
                         J_u_for = J_u_for + (1/cov_var) 
@@ -1676,6 +1915,7 @@ class KBCModel(nn.Module, ABC):
                                             nb_ent = lhs_3d.shape[1]
                                         else:
                                             nb_ent = 1
+                                        
                                         batch_scores = z_scores_1d if batch_scores is None else objective(
                                             z_scores_1d, batch_scores.view(-1, 1).repeat(1, nb_ent).view(-1), t_norm)
                                         nb_ent = lhs_3d.shape[1]
@@ -2072,6 +2312,16 @@ class SimplE(KBCModel):
         # to_score is all entities in tail
         for_prod = (lhs[0] * rel[0]) @ to_score[1].transpose(0, 1)
         inv_prod = (lhs[1] * rel[1]) @ to_score[0].transpose(0, 1)
+        #print(torch.argmax(for_prod[0]))
+        #sys.exit()
+        return torch.clamp((for_prod + inv_prod)/2, min=-20, max=20)
+    
+    def forward_emb_norel(self, lhs):
+        lhs = lhs[:, :self.rank], lhs[:, self.rank:]
+        to_score = self.embeddings[0].weight
+        to_score = to_score[:, :self.rank], to_score[:, self.rank:]
+        for_prod = (lhs[0]) @ to_score[1].transpose(0, 1)
+        inv_prod = (lhs[1]) @ to_score[0].transpose(0, 1)
         return torch.clamp((for_prod + inv_prod)/2, min=-20, max=20)
     
     def backward_emb(self, rhs, rel):
