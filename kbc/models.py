@@ -15,6 +15,7 @@ import torch
 from torch import nn
 from torch import optim
 from torch import Tensor
+import torch.nn.functional as F
 import numpy as np
 from kbc.regularizers import Regularizer
 import tqdm
@@ -1148,6 +1149,24 @@ class KBCModel(nn.Module, ABC):
         scores = self._optimize_variables(
             scoring_fn, params, optimizer, lr, max_steps)
         return scores
+    
+    def get_best_candidate_items (self, rel: Tensor,arg1: Optional[Tensor],arg2: Optional[Tensor],
+    candidates: int = 5,env: DynKBCSingleton = None, non_items = None, side: str= 'lhs') -> Tuple[Tensor, Tensor]:
+        z_scores, z_emb, z_indices = None, None, None
+        assert (arg1 is None) ^ (arg2 is None)
+        if side == 'lhs':
+            scores = self.forward_emb(arg1, rel)
+        elif side == 'rhs':
+            scores = self.backward_emb(arg1.unsqueeze(dim=0), rel.unsqueeze(dim=0))
+        non_items_tensor = torch.from_numpy(non_items.astype(np.int32))
+        mask = torch.ones(1, scores.shape[1], dtype=torch.bool)
+        mask[:, non_items_tensor] = False
+        scores_filtered = scores[mask]
+        mask_sq = mask.squeeze()
+        movie_embeddings = self.embeddings[0].weight[mask_sq]
+        z_scores, z_indices = torch.topk(scores_filtered, k=candidates)
+        z_emb = movie_embeddings[z_indices]
+        return z_scores, z_emb
 
     def get_best_candidates(self,
                             rel: Tensor,
@@ -1203,6 +1222,45 @@ class KBCModel(nn.Module, ABC):
     def min_max_rescale(self, x):
         return (x-torch.min(x))/(torch.max(x) - torch.min(x))
 
+    def query_answering_BF_instantiated_Fae(self, env: DynKBCSingleton, candidates: int = 5, non_items=None, user_likes_train=None,
+    cov_anchor=1e-2, cov_var=1e-2, cov_target=1e-2, lam=0.5):
+        parts = env.parts
+        chains, chain_instructions = env.chains, env.chain_instructions
+        intact_parts = env.intact_parts
+        nb_queries, emb_dim = chains[0][0].shape[0], chains[0][0].shape[1]
+        possible_heads_emb = env.possible_heads_emb; possible_tails_emb = env.possible_tails_emb
+        
+        user_embs = torch.empty((nb_queries, emb_dim), device=Device)
+        if env.graph_type == '1_2':
+            chain1, chain2 = chains[0], chains[1]
+
+            lhs_1_emb, rel_1_emb, rhs_1_emb, lhs_2_emb, rel_2_emb, rhs_2_emb = chain1[0], chain1[1], chain1[2], chain2[0], chain2[1], chain2[2]
+            if not 'SimplE' in str(self.model_type):
+                raise NotImplementedError
+            else:
+                for i in tqdm.tqdm(range(nb_queries // 5)):
+
+                    for j in range(5):
+                        lhs_1, rel_1, rhs_1 = lhs_1_emb[i*5+j], rel_1_emb[i*5+j], None
+                        lhs_2, rel_2, rhs_2 = None, rel_2_emb[i*5+j], rhs_2_emb[i*5+j]
+                        # mu_d_for = rhs_2[:emb_dim//2] * rel_2[emb_dim//2:]
+                        # mu_d_inv = rhs_2[emb_dim//2:] * rel_2[:emb_dim//2]
+                        top_items, top_item_embeddings = self.get_best_candidate_items(rel=rel_2, arg1=rhs_2, arg2=None, candidates=10, non_items=non_items, 
+                        side='rhs')
+
+                        top_item_embeddings_projected = rel_1 * top_item_embeddings
+                        norms = torch.norm(top_item_embeddings_projected, dim=1)
+                        max_norm_index = torch.argmax(norms)
+                        candidate_new_u = top_item_embeddings_projected[max_norm_index]
+                        user_embs[i*5+j, :emb_dim//2] = (1-lam) * lhs_1[:emb_dim//2] + lam * candidate_new_u[:emb_dim//2]
+                        user_embs[i*5+j, emb_dim//2:] = (1-lam) * lhs_1[emb_dim//2:] + lam * candidate_new_u[emb_dim//2:]
+
+
+                scores = self.forward_emb(user_embs, rel_1_emb[0].unsqueeze(dim=0))
+
+
+        return scores
+
 
     def query_answering_BF_Marginal_UI(self, env: DynKBCSingleton, candidates: int = 5, t_norm: str = 'min', 
     batch_size=1, scores_normalize=0, explain='no', cov_anchor=1e-2, cov_var=1e-2, cov_target=1e-2):
@@ -1226,7 +1284,6 @@ class KBCModel(nn.Module, ABC):
             chain1, chain2 = chains[0], chains[1]
 
             lhs_1_emb, rel_1_emb, rhs_1_emb, lhs_2_emb, rel_2_emb, rhs_2_emb = chain1[0], chain1[1], chain1[2], chain2[0], chain2[1], chain2[2]
-            
             if not 'SimplE' in str(self.model_type):
                 raise NotImplementedError
             else:
@@ -1236,81 +1293,123 @@ class KBCModel(nn.Module, ABC):
                         # lhs_1 is the user belief. rhs_2 is the evidence embedding
                         lhs_1, rel_1, rhs_1 = lhs_1_emb[i*5+j], rel_1_emb[i*5+j], None
                         lhs_2, rel_2, rhs_2 = None, rel_2_emb[i*5+j], rhs_2_emb[i*5+j]
-                        ## sanity check
+                        ### sanity check
+                        #print("gt:", intact_part1[i*5+j][2].astype(np.int32))
                         #mu_gt = self.entity_embeddings(torch.tensor((intact_part1[i*5+j][2].astype(np.int32))))
+                        #print("mu_gt:", mu_gt)
                         #h_gt_for = (1/cov_anchor) * mu_gt[:emb_dim//2] * rel_1[emb_dim//2:]
                         #h_gt_inv = (1/cov_anchor) * mu_gt[emb_dim//2:] * rel_1[:emb_dim//2]
-                        ##print(h_gt_inv)
+                        #print("h_gt_inv:", h_gt_inv)
+                        ##print(h_gt_for)
+                        ##sys.exit()
                         #if j == 0:
                         #    mu_u_for, mu_u_inv = lhs_1[:emb_dim//2], lhs_1[emb_dim//2:]
+                        #    print("mu_u_for before:", mu_u_for)
                         #    h_u_for, h_u_inv = (1/cov_target) * mu_u_for, (1/cov_target) * mu_u_inv
                         #    J_u_for, J_u_inv = (1/cov_target), (1/cov_target)
+                        #print("h_u_for before:", h_u_for)
                         #h_u_for = h_u_for + h_gt_inv
+                        #print("h_u_for after:",h_u_for)
                         #h_u_inv = h_u_inv + h_gt_for
                         #J_u_for = J_u_for + (1/cov_anchor)
                         #J_u_inv = J_u_inv + (1/cov_anchor)
                         #mu_u_for, mu_u_inv = h_u_for / J_u_for, h_u_inv / J_u_inv
+                        #print("mu_u_for after:", mu_u_for)
                         ##print(lhs_1)
                         ##print(h_gt_inv)
                         ##print(mu_u_for)
                         ##sys.exit()
                         #user_embs[i*5+j, :emb_dim//2] = mu_u_for
                         #user_embs[i*5+j, emb_dim//2:] = mu_u_inv
+                        #user_embs_test = torch.cat([mu_u_for, mu_u_inv], dim=0).unsqueeze(dim=0)
+                        #scores_test = self.forward_emb(user_embs_test, rel_1.unsqueeze(dim=0))
+                        ##print((scores_test[0][11080]))
+                        #print(scores_test[0][1])
+                        ## count number of elements in scores_test that are greater than scores_test[1]
+                        #rcount = (scores_test[0] > scores_test[0][1]).sum().item() + 1
+                        #print(rcount)
+                        #sys.exit()
 
                         #print(lhs_1)
                         mu_m_for = possible_tails_emb[0][i*5+j, :emb_dim//2] 
+                        #mu_m_for = torch.zeros_like(mu_m_for)
                         h_m_for = (1/cov_var) * mu_m_for
                         mu_m_inv = possible_tails_emb[0][i*5+j, emb_dim//2:]
+                        #mu_m_inv = torch.zeros_like(mu_m_inv)
                         h_m_inv = (1/cov_var) * mu_m_inv
-
                         mu_d_for = rhs_2[:emb_dim//2] * rel_2[emb_dim//2:]
                         h_d_for = (1/cov_anchor) * mu_d_for
                         mu_d_inv = rhs_2[emb_dim//2:] * rel_2[:emb_dim//2]
                         h_d_inv = (1/cov_anchor) * mu_d_inv
-
                         h_m_for = h_m_for + h_d_inv
                         h_m_inv = h_m_inv + h_d_for
-                        # #print(h_m_for)
-                        
+                        ### #print(h_m_for)   
                         J_m_for = (1/cov_anchor) + (1/cov_var)
-                        # # mu_m will be useful if you want to do explanation
+                        ## # mu_m will be useful if you want to do explanation
                         mu_m_for = h_m_for / J_m_for
                         J_m_inv = (1/cov_anchor) + (1/cov_var)
                         mu_m_inv = h_m_inv / J_m_inv
-
-                        ## update the precision and information of the target node given the variable
+                        ### update the precision and information of the target node given the variable
                         if j == 0:
-                            #mu_u = torch.unsqueeze(lhs_1, dim=0)
-                            mu_u = lhs_1
-                            mu_u_for = mu_u[:emb_dim//2]
-                            mu_u_inv = mu_u[emb_dim//2:]
-                            h_u_for = (1/cov_target) * mu_u_for
-                            h_u_inv = (1/cov_target) * mu_u_inv
-                            J_u_for = (1/cov_target)
-                            J_u_inv = (1/cov_target)
+                           #mu_u = torch.unsqueeze(lhs_1, dim=0)
+                           mu_u = lhs_1
+                           mu_u_for = mu_u[:emb_dim//2]
+                           mu_u_inv = mu_u[emb_dim//2:]
+                           h_u_for = (1/cov_target) * mu_u_for
+                           h_u_inv = (1/cov_target) * mu_u_inv
+                           J_u_for = (1/cov_target)
+                           J_u_inv = (1/cov_target)
+                           #user_embs_test = torch.cat([mu_u_for, mu_u_inv], dim=0).unsqueeze(dim=0)
+                           #scores_test_pre = self.forward_emb(user_embs_test, rel_1.unsqueeze(dim=0))
+                           #rcount_pre = (scores_test_pre[0] > scores_test_pre[0][1]).sum().item() + 1
+                           #print("rcount_pre:", rcount_pre)
                         #print(h_u_for)
 
-                        h_u_for = h_u_for - rel_1[:emb_dim//2] * (1 / J_m_inv) * h_m_inv
-                        J_u_for = J_u_for - rel_1[:emb_dim//2] * (1 / J_m_inv) * rel_1[:emb_dim//2]
-                        h_u_inv = h_u_inv - rel_1[emb_dim//2:] * (1 / J_m_for) * h_m_for
-                        J_u_inv = J_u_inv - rel_1[emb_dim//2:] * (1 / J_m_for) * rel_1[emb_dim//2:]
+                        #h_u_for = h_u_for - rel_1[:emb_dim//2] * (1 / J_m_inv) * h_m_inv
+                        #J_u_for = J_u_for - rel_1[:emb_dim//2] * (1 / J_m_inv) * rel_1[:emb_dim//2]
+                        #h_u_inv = h_u_inv - rel_1[emb_dim//2:] * (1 / J_m_for) * h_m_for
+                        #J_u_inv = J_u_inv - rel_1[emb_dim//2:] * (1 / J_m_for) * rel_1[emb_dim//2:]
+                        h_u_for = h_u_for + h_m_inv * rel_1[:emb_dim//2]
+                        h_u_inv = h_u_inv + h_m_for * rel_1[emb_dim//2:]
+                        J_u_for = J_u_for + J_m_inv
+                        J_u_inv = J_u_inv + J_m_for
+                        
                         mu_u_for = h_u_for / J_u_for
                         mu_u_inv = h_u_inv / J_u_inv
                      
                         user_embs[i*5+j, :emb_dim//2] = mu_u_for
                         user_embs[i*5+j, emb_dim//2:] = mu_u_inv
+                        #user_embs_test = torch.cat([mu_u_for, mu_u_inv], dim=0).unsqueeze(dim=0)
+                        #scores_test = self.forward_emb(user_embs_test, rel_1.unsqueeze(dim=0))
+                        #print(scores_test[0][1])
+                        #print(torch.max(scores_test[0]))
+                        #rcount = (scores_test[0] > scores_test[0][1]).sum().item() + 1
+                        #print(rcount)
+                        #sys.exit()
 
                         # from here on, like user belief updating without beam search
                         # for instantiated, we have to first find the top items as existential, then update user belief
 
                 # once we have the user embeddings for each query, we can calculate the recommendation scores
-                scores = self.forward_emb(user_embs, rel_1_emb)
+                scores = self.forward_emb(user_embs, rel_1_emb[0].unsqueeze(dim=0))
 
         elif env.graph_type == '1_3':
             part1 , part2, part3 = parts[0], parts[1], parts[2]
+            #print(part1[0])
+            
             intact_part1, intact_part2, intact_part3 = intact_parts[0], intact_parts[1], intact_parts[2]
+            #print(intact_part1[0])
             chain1, chain2, chain3 = chains[0], chains[1], chains[2]
+            #print(chain1[2])
+
+            #print(self.entity_embeddings(torch.tensor(part1[0][0])))
             lhs_1_emb, rel_1_emb, rhs_1_emb, lhs_2_emb, rel_2_emb, rhs_2_emb, lhs_3_emb, rel_3_emb, rhs_3_emb = chain1[0], chain1[1], chain1[2], chain2[0], chain2[1], chain2[2], chain3[0], chain3[1], chain3[2]
+            
+            
+            #anchor_emb = (self.entity_embeddings(torch.tensor(intact_part3[0][2])))
+
+            #gt_emb = (self.entity_embeddings(torch.tensor(intact_part1[0][2].astype(int))))
+
             if not 'SimplE' in str(self.model_type):
                 raise NotImplementedError
             else:
@@ -1319,8 +1418,10 @@ class KBCModel(nn.Module, ABC):
                         lhs_1, rel_1, rhs_1 = lhs_1_emb[i*5+j], rel_1_emb[i*5+j], None
                         lhs_2, rel_2, rhs_2 = None, rel_2_emb[i*5+j], None
                         lhs_3, rel_3, rhs_3 = None, rel_3_emb[i*5+j], rhs_3_emb[i*5+j]
+                        # here
                         mu_m2_for = possible_tails_emb[1][i*5+j, :emb_dim//2]
                         h_m2_for = (1/cov_var) * mu_m2_for
+
                         mu_m2_inv = possible_tails_emb[1][i*5+j, emb_dim//2:]
                         h_m2_inv = (1/cov_var) * mu_m2_inv
                         mu_d_for = rhs_3[:emb_dim//2] * rel_3[emb_dim//2:]
@@ -1333,17 +1434,18 @@ class KBCModel(nn.Module, ABC):
 
                         mu_m1_for = possible_tails_emb[0][i*5+j, :emb_dim//2]
                         h_m1_for = (1/cov_var) * mu_m1_for
+                        
                         mu_m1_inv = possible_tails_emb[0][i*5+j, emb_dim//2:]
                         h_m1_inv = (1/cov_var) * mu_m1_inv
-                        # h_m1_for = h_m1_for + h_m2_inv; h_m1_inv = h_m1_inv + h_m2_for
-                        # # check this
-                        # J_m1_for = (1/cov_var) +  J_m2_for
-                        # J_m1_inv = (1/cov_var) + J_m2_inv
-                        # mu_m1_for = h_m1_for / J_m1_for; mu_m1_inv = h_m1_inv / J_m1_inv
-                        h_m1_for = h_m1_for - rel_2[:emb_dim//2] * (1 / J_m2_inv) * h_m2_inv
-                        J_m1_for = (1/cov_var) - rel_2[:emb_dim//2] * (1 / J_m2_inv) * rel_2[:emb_dim//2]
-                        h_m1_inv = h_m1_inv - rel_2[emb_dim//2:] * (1 / J_m2_for) * h_m2_for
-                        J_m1_inv = (1/cov_var) - rel_2[emb_dim//2:] * (1 / J_m2_for) * rel_2[emb_dim//2:]
+                        # h_m1_for = h_m1_for - rel_2[:emb_dim//2] * (1 / J_m2_inv) * h_m2_inv
+                        # J_m1_for = (1/cov_var) - rel_2[:emb_dim//2] * (1 / J_m2_inv) * rel_2[:emb_dim//2]
+                        # h_m1_inv = h_m1_inv - rel_2[emb_dim//2:] * (1 / J_m2_for) * h_m2_for
+                        # J_m1_inv = (1/cov_var) - rel_2[emb_dim//2:] * (1 / J_m2_for) * rel_2[emb_dim//2:]
+                        h_m1_for = h_m1_for + h_m2_inv
+                        h_m1_inv = h_m1_inv + h_m2_for
+                        J_m1_for =  (1/cov_var) + J_m2_inv
+                        J_m1_inv =  (1/cov_var) + J_m2_for
+
                         mu_m1_for = h_m1_for / J_m1_for; mu_m1_inv = h_m1_inv / J_m1_inv
 
                         if j == 0:
@@ -1354,16 +1456,20 @@ class KBCModel(nn.Module, ABC):
                             h_u_inv = (1/cov_target) * mu_u_inv
                             J_u_for = (1/cov_target)
                             J_u_inv = (1/cov_target)
+                        #h_u_for = h_u_for - rel_1[:emb_dim//2] * (1 / J_m1_inv) * h_m1_inv
+
                         
-                        h_u_for = h_u_for - rel_1[:emb_dim//2] * (1 / J_m1_inv) * h_m1_inv
-                        J_u_for = J_u_for - rel_1[:emb_dim//2] * (1 / J_m1_inv) * rel_1[:emb_dim//2]
-                        h_u_inv = h_u_inv - rel_1[emb_dim//2:] * (1 / J_m1_for) * h_m1_for
-                        J_u_inv = J_u_inv - rel_1[emb_dim//2:] * (1 / J_m1_for) * rel_1[emb_dim//2:]
+                        #J_u_for = J_u_for - rel_1[:emb_dim//2] * (1 / J_m1_inv) * rel_1[:emb_dim//2]
+                        #h_u_inv = h_u_inv - rel_1[emb_dim//2:] * (1 / J_m1_for) * h_m1_for
+                        #J_u_inv = J_u_inv - rel_1[emb_dim//2:] * (1 / J_m1_for) * rel_1[emb_dim//2:]
+                        h_u_for = h_u_for + h_m1_inv
+                        h_u_inv = h_u_inv + h_m1_for
                         mu_u_for = h_u_for / J_u_for
                         mu_u_inv = h_u_inv / J_u_inv
+
                         user_embs[i*5+j, :emb_dim//2] = mu_u_for
                         user_embs[i*5+j, emb_dim//2:] = mu_u_inv
-                scores = self.forward_emb(user_embs, rel_1_emb)
+                scores = self.forward_emb(user_embs, rel_1_emb[0].unsqueeze(dim=0))
         elif env.graph_type == '1_4':
             part1 , part2, part3, part4 = parts[0], parts[1], parts[2], parts[3]
             intact_part1, intact_part2, intact_part3, intact_part4 = intact_parts[0], intact_parts[1], intact_parts[2], intact_parts[3]
@@ -1395,20 +1501,28 @@ class KBCModel(nn.Module, ABC):
                         mu_m2_inv = possible_tails_emb[1][i*5+j, emb_dim//2:]
                         h_m2_inv = (1/cov_var) * mu_m2_inv
 
-                        h_m2_for = h_m2_for - rel_3[:emb_dim//2] * (1 / J_m3_inv) * h_m3_inv
-                        J_m2_for = (1/cov_var) - rel_3[:emb_dim//2] * (1 / J_m3_inv) * rel_3[:emb_dim//2]
-                        h_m2_inv = h_m2_inv - rel_3[emb_dim//2:] * (1 / J_m3_for) * h_m3_for
-                        J_m2_inv = (1/cov_var) - rel_3[emb_dim//2:] * (1 / J_m3_for) * rel_3[emb_dim//2:]
+                        # h_m2_for = h_m2_for - rel_3[:emb_dim//2] * (1 / J_m3_inv) * h_m3_inv
+                        # J_m2_for = (1/cov_var) - rel_3[:emb_dim//2] * (1 / J_m3_inv) * rel_3[:emb_dim//2]
+                        # h_m2_inv = h_m2_inv - rel_3[emb_dim//2:] * (1 / J_m3_for) * h_m3_for
+                        # J_m2_inv = (1/cov_var) - rel_3[emb_dim//2:] * (1 / J_m3_for) * rel_3[emb_dim//2:]
+                        # mu_m2_for = h_m2_for / J_m2_for; mu_m2_inv = h_m2_inv / J_m2_inv
+
+                        h_m2_for = h_m2_for + h_m3_inv; h_m2_inv = h_m2_inv + h_m3_for
+                        J_m2_for = (1/cov_var) + J_m3_inv; J_m2_inv = (1/cov_var) + J_m3_for
                         mu_m2_for = h_m2_for / J_m2_for; mu_m2_inv = h_m2_inv / J_m2_inv
 
                         mu_m1_for = possible_tails_emb[0][i*5+j, :emb_dim//2]
                         h_m1_for = (1/cov_var) * mu_m1_for
                         mu_m1_inv = possible_tails_emb[0][i*5+j, emb_dim//2:]
                         h_m1_inv = (1/cov_var) * mu_m1_inv
-                        h_m1_for = h_m1_for - rel_2[:emb_dim//2] * (1 / J_m2_inv) * h_m2_inv
-                        J_m1_for = (1/cov_var) - rel_2[:emb_dim//2] * (1 / J_m2_inv) * rel_2[:emb_dim//2]
-                        h_m1_inv = h_m1_inv - rel_2[emb_dim//2:] * (1 / J_m2_for) * h_m2_for
-                        J_m1_inv = (1/cov_var) - rel_2[emb_dim//2:] * (1 / J_m2_for) * rel_2[emb_dim//2:]
+                        # h_m1_for = h_m1_for - rel_2[:emb_dim//2] * (1 / J_m2_inv) * h_m2_inv
+                        # J_m1_for = (1/cov_var) - rel_2[:emb_dim//2] * (1 / J_m2_inv) * rel_2[:emb_dim//2]
+                        # h_m1_inv = h_m1_inv - rel_2[emb_dim//2:] * (1 / J_m2_for) * h_m2_for
+                        # J_m1_inv = (1/cov_var) - rel_2[emb_dim//2:] * (1 / J_m2_for) * rel_2[emb_dim//2:]
+                        # mu_m1_for = h_m1_for / J_m1_for; mu_m1_inv = h_m1_inv / J_m1_inv
+
+                        h_m1_for = h_m1_for + h_m2_inv; h_m1_inv = h_m1_inv + h_m2_for
+                        J_m1_for = (1/cov_var) + J_m2_inv; J_m1_inv = (1/cov_var) + J_m2_for
                         mu_m1_for = h_m1_for / J_m1_for; mu_m1_inv = h_m1_inv / J_m1_inv
 
                         if j == 0:
@@ -1420,15 +1534,18 @@ class KBCModel(nn.Module, ABC):
                             J_u_for = (1/cov_target)
                             J_u_inv = (1/cov_target)
                         
-                        h_u_for = h_u_for - rel_1[:emb_dim//2] * (1 / J_m1_inv) * h_m1_inv
-                        J_u_for = J_u_for - rel_1[:emb_dim//2] * (1 / J_m1_inv) * rel_1[:emb_dim//2]
-                        h_u_inv = h_u_inv - rel_1[emb_dim//2:] * (1 / J_m1_for) * h_m1_for
-                        J_u_inv = J_u_inv - rel_1[emb_dim//2:] * (1 / J_m1_for) * rel_1[emb_dim//2:]
+                        # h_u_for = h_u_for - rel_1[:emb_dim//2] * (1 / J_m1_inv) * h_m1_inv
+                        # J_u_for = J_u_for - rel_1[:emb_dim//2] * (1 / J_m1_inv) * rel_1[:emb_dim//2]
+                        # h_u_inv = h_u_inv - rel_1[emb_dim//2:] * (1 / J_m1_for) * h_m1_for
+                        # J_u_inv = J_u_inv - rel_1[emb_dim//2:] * (1 / J_m1_for) * rel_1[emb_dim//2:]
+
+                        h_u_for = h_u_for + h_m1_inv; h_u_inv = h_u_inv + h_m1_for
+                        J_u_for = J_u_for + J_m1_inv; J_u_inv = J_u_inv + J_m1_for
                         mu_u_for = h_u_for / J_u_for
                         mu_u_inv = h_u_inv / J_u_inv
                         user_embs[i*5+j, :emb_dim//2] = mu_u_for
                         user_embs[i*5+j, emb_dim//2:] = mu_u_inv
-                scores = self.forward_emb(user_embs, rel_1_emb)
+                scores = self.forward_emb(user_embs, rel_1_emb[0].unsqueeze(dim=0))
 
 
 
@@ -1478,11 +1595,13 @@ class KBCModel(nn.Module, ABC):
                             J_u_for = (1/cov_target)
                             J_u_inv = (1/cov_target)
 
-                        h_u_for = h_u_for - rel_1[:emb_dim//2] * (1 / J_m_inv) * h_m_inv
-                        J_u_for = J_u_for - rel_1[:emb_dim//2] * (1 / J_m_inv) * rel_1[:emb_dim//2]
-                        h_u_inv = h_u_inv - rel_1[emb_dim//2:] * (1 / J_m_for) * h_m_for
-                        J_u_inv = J_u_inv - rel_1[emb_dim//2:] * (1 / J_m_for) * rel_1[emb_dim//2:]
+                        # h_u_for = h_u_for - rel_1[:emb_dim//2] * (1 / J_m_inv) * h_m_inv
+                        # J_u_for = J_u_for - rel_1[:emb_dim//2] * (1 / J_m_inv) * rel_1[:emb_dim//2]
+                        # h_u_inv = h_u_inv - rel_1[emb_dim//2:] * (1 / J_m_for) * h_m_for
+                        # J_u_inv = J_u_inv - rel_1[emb_dim//2:] * (1 / J_m_for) * rel_1[emb_dim//2:]
 
+                        h_u_for = h_u_for + h_m_inv; h_u_inv = h_u_inv + h_m_for
+                        J_u_for = J_u_for + (1/cov_var); J_u_inv = J_u_inv + (1/cov_var)
                         mu_u_for = h_u_for / J_u_for
                         mu_u_inv = h_u_inv / J_u_inv
 
@@ -1552,12 +1671,13 @@ class KBCModel(nn.Module, ABC):
                             J_u_for = (1/cov_target)
                             J_u_inv = (1/cov_target)
 
-                        h_u_for = h_u_for - rel_1[:emb_dim//2] * (1 / J_m_inv) * h_m_inv
+                        # h_u_for = h_u_for - rel_1[:emb_dim//2] * (1 / J_m_inv) * h_m_inv
 
-                        J_u_for = J_u_for - rel_1[:emb_dim//2] * (1 / J_m_inv) * rel_1[:emb_dim//2]
-                        h_u_inv = h_u_inv - rel_1[emb_dim//2:] * (1 / J_m_for) * h_m_for
-                        J_u_inv = J_u_inv - rel_1[emb_dim//2:] * (1 / J_m_for) * rel_1[emb_dim//2:]
-
+                        # J_u_for = J_u_for - rel_1[:emb_dim//2] * (1 / J_m_inv) * rel_1[:emb_dim//2]
+                        # h_u_inv = h_u_inv - rel_1[emb_dim//2:] * (1 / J_m_for) * h_m_for
+                        # J_u_inv = J_u_inv - rel_1[emb_dim//2:] * (1 / J_m_for) * rel_1[emb_dim//2:]
+                        h_u_for = h_u_for + h_m_inv; h_u_inv = h_u_inv + h_m_for
+                        J_u_for = J_u_for + (1/cov_var); J_u_inv = J_u_inv + (1/cov_var)
                         mu_u_for = h_u_for / J_u_for
                         mu_u_inv = h_u_inv / J_u_inv
 
@@ -1718,16 +1838,15 @@ class KBCModel(nn.Module, ABC):
             chain1, chain2 = chains[0], chains[1]
             lhs_1_emb, rel_1_emb, rhs_1_emb, lhs_2_emb, rel_2_emb, rhs_2_emb = chain1[0], chain1[1], chain1[2], chain2[0], chain2[1], chain2[2]
         
-        elif env.graph_type == '2_2':
+        elif env.graph_type == '2_2' or env.graph_type == '1_3':
             part1, part2, part3 = parts[0], parts[1], parts[2]
             chain1, chain2, chain3 = chains[0], chains[1], chains[2]
             lhs_1_emb, rel_1_emb, rhs_1_emb, lhs_2_emb, rel_2_emb, rhs_2_emb, lhs_3_emb, rel_3_emb, rhs_3_emb = chain1[0], chain1[1], chain1[2], chain2[0], chain2[1], chain2[2], chain3[0], chain3[1], chain3[2]
-        elif env.graph_type == '2_3':
+        elif env.graph_type == '2_3' or env.graph_type == '1_4' or env.graph_type == '3_3' or env.graph_type == '4_3':
             part1, part2, part3, part4 = parts[0], parts[1], parts[2], parts[3]
             chain1, chain2, chain3, chain4 = chains[0], chains[1], chains[2], chains[3]
             lhs_1_emb, rel_1_emb, rhs_1_emb, lhs_2_emb, rel_2_emb, rhs_2_emb, lhs_3_emb, rel_3_emb, rhs_3_emb, lhs_4_emb, rel_4_emb, rhs_4_emb = \
                 chain1[0], chain1[1], chain1[2], chain2[0], chain2[1], chain2[2], chain3[0], chain3[1], chain3[2], chain4[0], chain4[1], chain4[2]
-
 
         if not 'SimplE' in str(self.model_type):
             raise NotImplementedError
@@ -1763,179 +1882,457 @@ class KBCModel(nn.Module, ABC):
 
         return scores
 
+    # def query_answering_BF_Exist(self, env: DynKBCSingleton, candidates: int = 5, t_norm: str = 'min', 
+    # batch_size=1, scores_normalize=0, explain=False, user_belief=None):
+
+    #     res = None
+    #     if 'disj' in env.graph_type:
+    #         objective = self.t_conorm
+    #     else: 
+    #         objective = self.t_norm
+    #     chains, chain_instructions = env.chains, env.chain_instructions
+    #     nb_queries, embedding_size = chains[0][0].shape[0], chains[0][0].shape[1]
+    #     scores = None
+    #     batches = make_batches(nb_queries, batch_size)
+    #     # batches = [(0, 1), (1, 2), ...)]
+    #     for i, batch in enumerate(tqdm.tqdm(batches)):
+    #         nb_branches = 1
+    #         nb_ent = 0
+    #         batch_scores = None
+    #         candidate_cache = {}
+    #         batch_size = batch[1] - batch[0]
+    #         dnf_flag = False
+    #         if 'disj' in env.graph_type:
+    #             dnf_flag = True
+
+
+    #         for inst_ind, inst in enumerate(chain_instructions):
+
+    #             # inst = "hop_0_1"
+    #             # inst_ind = 0
+    #             with torch.no_grad():
+    #                 # in fact our projection is like an intersection for the cqd (item has a fact and is 
+    #                 # liked by the user)
+    #                 if 'hop' in inst or 'inter' in inst:
+
+    #                     ind_1 = int(inst.split("_")[-2])
+    #                     ind_2 = int(inst.split("_")[-1])
+    #                     # indices = [0,1]
+    #                     indices = [ind_1, ind_2]
+
+    #                     if objective == self.t_norm and dnf_flag:
+    #                         objective = self.t_conorm
+    #                     if 'inter' in inst:
+
+    #                         if len(inst.split("_")) == 4:
+    #                             ind_1 = 0
+    #                             ind_2 = int(inst.split("_")[-2])
+    #                             ind_3 = int(inst.split("_")[-1])
+    #                             indices = [ind_1, ind_2, ind_3]
+    #                         elif len(inst.split("_")) == 5:
+    #                             ind_1 = 0
+    #                             ind_2 = int(inst.split("_")[-3])
+    #                             ind_3 = int(inst.split("_")[-2])
+    #                             ind_4 = int(inst.split("_")[-1])
+    #                             indices = [ind_1, ind_2, ind_3, ind_4]
+
+    #                     for intersection_num, ind in enumerate(indices):
+
+    #                         # ind = 0 - 1 
+    #                         # intersection_num = 0 - 1 
+    #                         last_step = (inst_ind == len(chain_instructions)-1)
+    #                         # last_step = True
+                            
+    #                         lhs, rel, rhs = chains[ind]
+                            
+    #                         # this "if" only happens for the first part of the chain ([user, likes, ?])
+    #                         if lhs is not None:
+    #                             if user_belief is not None:
+    #                                 lhs = user_belief
+    #                             lhs = lhs[batch[0]:batch[1]]
+    #                             lhs = lhs.view(-1, 1,
+    #                                            embedding_size).repeat(1, nb_branches, 1)
+
+    #                             lhs = lhs.view(-1, embedding_size)
+    #                             # lhs becomes [1, emb_size]
+    #                             rel = rel[batch[0]:batch[1]]
+    #                             rel = rel.view(-1, 1,
+    #                                        embedding_size).repeat(1, nb_branches, 1)
+    #                             rel = rel.view(-1, embedding_size)
+    #                             # rel becomes [1, emb_size]
+
+    #                             if intersection_num > 0 and 'disj' in env.graph_type:
+    #                                 raise NotImplementedError
+
+    #                             if f"rhs_{ind}" not in candidate_cache or last_step:
+    #                                 # z_scores is the scores of all entities to be the 
+    #                                 # rhs and rhs_3d is their embeddings ([1,no_entity, emb_size])
+    #                                 z_scores, rhs_3d = self.get_best_candidates(
+    #                                 rel, lhs, None, candidates, last_step, None)
+    #                                 z_scores_1d = z_scores.view(-1)
+
+    #                                 if 'disj' in env.graph_type or scores_normalize:
+    #                                     z_scores_1d = torch.sigmoid(z_scores_1d)
+
+    #                                 if not last_step:
+    #                                     nb_sources = rhs_3d.shape[0] * \
+    #                                         rhs_3d.shape[1]
+    #                                     nb_branches = nb_sources // batch_size
+    #                                 else:
+    #                                     if ind == indices[0]:
+    #                                         nb_ent = rhs_3d.shape[1]
+    #                                     else:
+    #                                         nb_ent = 1
+ 
+    #                                     # first time the batch scores is None and the z_scores we make it equal to z_scores_1d
+    #                                     batch_scores = z_scores_1d if batch_scores is None else objective(
+    #                                         z_scores_1d, batch_scores.view(-1, 1).repeat(1, nb_ent).view(-1), t_norm)
+    #                                     nb_ent = rhs_3d.shape[1]
+
+    #                                 candidate_cache[f"rhs_{ind}"] = (batch_scores, rhs_3d)
+
+    #                                 if ind == indices[0] and 'disj' in env.graph_type:
+    #                                     raise NotImplementedError
+
+    #                                 #if ind == indices[-1]:
+    #                                 #    candidate_cache[f"lhs_{ind+1}"] = (batch_scores, rhs_3d)
+    #                             else:
+    #                                 raise NotImplementedError
+    #                             del lhs, rel, rhs, rhs_3d, z_scores_1d, z_scores
+                                    
+    #                         # this is for the second part of the chain ([item, rel, tail])
+    #                         elif ind>0:
+    #                             rhs = rhs[batch[0]:batch[1]]
+    #                             rhs = rhs.view(-1, 1,
+    #                                            embedding_size).repeat(1, nb_branches, 1)
+    #                             rhs = rhs.view(-1, embedding_size)
+    #                             rel = rel[batch[0]:batch[1]]
+    #                             rel = rel.view(-1, 1,
+    #                                        embedding_size).repeat(1, nb_branches, 1)
+    #                             rel = rel.view(-1, embedding_size)
+
+    #                             if intersection_num > 0 and 'disj' in env.graph_type:
+    #                                 raise NotImplementedError
+    #                             if f"lhs_{ind}" not in candidate_cache or last_step:
+    #                                 z_scores, lhs_3d = self.get_best_candidates(
+    #                                     rel, rhs, None, candidates, last_step, None, 'rhs')
+    #                                 z_scores_1d = z_scores.view(-1)
+
+    #                                 if 'disj' in env.graph_type or scores_normalize:
+    #                                     z_scores_1d = torch.sigmoid(z_scores_1d)
+    #                                 # TODO: check this
+    #                                 if not last_step:
+    #                                     nb_sources = lhs_3d.shape[0] * \
+    #                                         lhs_3d.shape[1]
+    #                                     nb_branches = nb_sources // batch_size
+    #                                 if not last_step:
+    #                                     batch_scores = z_scores_1d if batch_scores is None else objective(
+    #                                         z_scores_1d, batch_scores.view(-1, 1).repeat(1, candidates).view(-1), t_norm)
+    #                                 else:
+
+    #                                     if ind == indices[0]:
+    #                                         nb_ent = lhs_3d.shape[1]
+    #                                     else:
+    #                                         nb_ent = 1
+                                        
+    #                                     batch_scores = z_scores_1d if batch_scores is None else objective(
+    #                                         z_scores_1d, batch_scores.view(-1, 1).repeat(1, nb_ent).view(-1), t_norm)
+    #                                     nb_ent = lhs_3d.shape[1]
+    #                                 candidate_cache[f"lhs_{ind}"] = (batch_scores, lhs_3d)
+
+    #                             else:
+    #                                 raise NotImplementedError
+    #                             del lhs, rel, rhs, lhs_3d, z_scores_1d, z_scores
+                                
+    #         if batch_scores is not None:
+
+    #             scores_2d = batch_scores.view(batch_size, -1, nb_ent)
+    #             res, _ = torch.max(scores_2d, dim=1)
+    #             scores = res if scores is None else torch.cat([scores, res])
+    #             del batch_scores, scores_2d, res, candidate_cache
+
+    #         else:
+    #             assert False, "Batch Scores are empty: an error went uncaught."
+    #         res = scores
+
+    #     return res
     def query_answering_BF_Exist(self, env: DynKBCSingleton, candidates: int = 5, t_norm: str = 'min', 
     batch_size=1, scores_normalize=0, explain=False, user_belief=None):
 
         res = None
+        # for disjunction, we need to use the t-conorm
         if 'disj' in env.graph_type:
             objective = self.t_conorm
-        else: 
+        else:
             objective = self.t_norm
+
         chains, chain_instructions = env.chains, env.chain_instructions
-        nb_queries, embedding_size = chains[0][0].shape[0], chains[0][0].shape[1]
+        # chain_instructions = ['hop_0_1']
+        # chains = [part1, part2]
+        # part1 = [lhs_1, rels_1, rhs_1]
+        # len(lhs_2) = 8000
+
+
+        # in our lists, the order is from target to anchor, but this code assumes the opposite, so we reverse chains
+        chains = chains[::-1]
+        # for now, we're neglecting the 'user' part of the chain evidence
+        chains = chains[:-1]
+
+        nb_queries, embedding_size = chains[0][2].shape[0], chains[0][2].shape[1]
+
         scores = None
+
+        # data_loader = DataLoader(dataset=chains, batch_size=16, shuffle=False)
+
         batches = make_batches(nb_queries, batch_size)
-        # batches = [(0, 1), (1, 2), ...)]
+        # batches = [(0,1), (1,2), (2,3), ...]
+
         for i, batch in enumerate(tqdm.tqdm(batches)):
             nb_branches = 1
             nb_ent = 0
             batch_scores = None
             candidate_cache = {}
+
             batch_size = batch[1] - batch[0]
+            # here, batch_size is 1
+            # torch.cuda.empty_cache()
             dnf_flag = False
             if 'disj' in env.graph_type:
                 dnf_flag = True
 
-
             for inst_ind, inst in enumerate(chain_instructions):
-
-                # inst = "hop_0_1"
-                # inst_ind = 0
                 with torch.no_grad():
-                    # in fact our projection is like an intersection for the cqd (item has a fact and is 
-                    # liked by the user)
-                    if 'hop' in inst or 'inter' in inst:
+                    # this if for the case of projection
+                    if 'hop' in inst:
+                        if len(inst.split("_")) == 2:
+                            # this is 2p where we only have one hop
+                            ind_1 = int(inst.split("_")[-1])
+                            indices = [ind_1]
 
+                            #  ATTENTION! this is last hop only for the case of neglecting the user
+                            last_hop = True
+                        elif len(inst.split("_")) == 3:
+
+                            ind_1 = int(inst.split("_")[-2])
+                            ind_2 = int(inst.split("_")[-1])
+
+                            indices = [ind_1, ind_2]
+                            last_hop = False
+                        elif len(inst.split("_")) == 4:
+                            ind_1 = int(inst.split("_")[-3])
+                            ind_2 = int(inst.split("_")[-2])
+                            ind_3 = int(inst.split("_")[-1])
+                            indices = [ind_1, ind_2, ind_3]
+                            last_hop = False
+                        # indices = [0, 1]
+                        # each index is one hop
+
+                        if objective == self.t_conorm and dnf_flag:
+                            objective = self.t_norm
+
+                        
+                        for hop_num, ind in enumerate(indices):
+                            
+                            # print("HOP")
+                            # print(candidate_cache.keys())
+                            last_step = (inst_ind == len(
+                                chain_instructions)-1) and last_hop
+
+
+                            lhs, rel, rhs = chains[ind]
+
+                            # [a, p, X], [X, p, Y][Y, p, Z]
+
+                            # takes one of the lhs, rel (their embeddings)
+                            if rhs is not None:
+                                rhs = rhs[batch[0]:batch[1]]
+
+                            else:
+                                # print("MTA BRAT")
+                                batch_scores, rhs_3d = candidate_cache[f"rhs_{ind}"]
+                                rhs = rhs_3d.view(-1, embedding_size)
+                            rel = rel[batch[0]:batch[1]]
+                            rel = rel.view(-1, 1,
+                                           embedding_size).repeat(1, nb_branches, 1)
+                            rel = rel.view(-1, embedding_size)
+                            if f"lhs_{ind}" not in candidate_cache:
+                                # gets best candidates for the rhs of this hop and the scores
+                                z_scores, lhs_3d = self.get_best_candidates(
+                                    rel, rhs, None, candidates, last_step, None, 'rhs')
+
+                                # z_scores : tensor of shape [Num_queries * Candidates^K]
+                                # rhs_3d : tensor of shape [Num_queries, Candidates^K, Embedding_size]
+
+                                # [Num_queries * Candidates^K]
+                                z_scores_1d = z_scores.view(-1)
+                                if 'disj' in env.graph_type or scores_normalize:
+                                    z_scores_1d = torch.sigmoid(z_scores_1d)
+
+                                # B * S
+                                nb_sources = lhs_3d.shape[0]*lhs_3d.shape[1]
+                                nb_branches = nb_sources // batch_size
+                                # if the batch_score is None, we initialize it with the candidates scores (since there's just one hop). otherwise, the t-norm is applied
+                                if not last_step:
+                                    batch_scores = z_scores_1d if batch_scores is None else objective(
+                                        z_scores_1d, batch_scores.view(-1, 1).repeat(1, candidates).view(-1), t_norm)
+                                else:
+                                    nb_ent = lhs_3d.shape[1]
+                                    batch_scores = z_scores_1d if batch_scores is None else objective(
+                                        z_scores_1d, batch_scores.view(-1, 1).repeat(1, nb_ent).view(-1), t_norm)
+                                # candidate_cache stores the scores and the candidate embeddings for each rhs
+                                candidate_cache[f"lhs_{ind}"] = (
+                                    batch_scores, lhs_3d)
+                                if not last_hop:
+                                    # candidate_cache of the lhs of this hop is the rhs of the next hop
+                                    # remember that since we've reverted the chains, this should be hop_num +1 not -1
+                                    candidate_cache[f"rhs_{indices[hop_num+1]}"] = (
+                                        batch_scores, lhs_3d)
+
+                            else:
+                                # if we already have the lhs of this hop, we are in the last hop (so no more rhs)
+                                batch_scores, lhs_3d = candidate_cache[f"lhs_{ind}"]
+                                candidate_cache[f"rhs_{ind+1}"] = (
+                                    batch_scores, lhs_3d)
+                                last_hop = True
+                                del lhs, rel
+                                # #torch.cuda.empty_cache() 
+                                continue
+                            if not last_hop:
+                                if hop_num == indices[-2]:
+                                    last_hop = True
+                            del lhs, rel, rhs, lhs_3d, z_scores_1d, z_scores
+                            # #torch.cuda.empty_cache()
+
+                    elif 'inter' in inst:
                         ind_1 = int(inst.split("_")[-2])
                         ind_2 = int(inst.split("_")[-1])
-                        # indices = [0,1]
+
                         indices = [ind_1, ind_2]
 
                         if objective == self.t_norm and dnf_flag:
                             objective = self.t_conorm
-                        if 'inter' in inst:
 
-                            if len(inst.split("_")) == 4:
-                                ind_1 = 0
-                                ind_2 = int(inst.split("_")[-2])
-                                ind_3 = int(inst.split("_")[-1])
-                                indices = [ind_1, ind_2, ind_3]
-                            elif len(inst.split("_")) == 5:
-                                ind_1 = 0
-                                ind_2 = int(inst.split("_")[-3])
-                                ind_3 = int(inst.split("_")[-2])
-                                ind_4 = int(inst.split("_")[-1])
-                                indices = [ind_1, ind_2, ind_3, ind_4]
+                        if len(inst.split("_")) > 3:
+                            ind_1 = int(inst.split("_")[-3])
+                            ind_2 = int(inst.split("_")[-2])
+                            ind_3 = int(inst.split("_")[-1])
+
+                            indices = [ind_1, ind_2, ind_3]
 
                         for intersection_num, ind in enumerate(indices):
+                            # print("intersection")
+                            # print(candidate_cache.keys())
 
-                            # ind = 0 - 1 
-                            # intersection_num = 0 - 1 
+                            # and ind == indices[0]
                             last_step = (inst_ind == len(chain_instructions)-1)
-                            # last_step = True
-                            
+
                             lhs, rel, rhs = chains[ind]
-                            
-                            # this "if" only happens for the first part of the chain ([user, likes, ?])
-                            if lhs is not None:
-                                if user_belief is not None:
-                                    lhs = user_belief
-                                lhs = lhs[batch[0]:batch[1]]
-                                lhs = lhs.view(-1, 1,
-                                               embedding_size).repeat(1, nb_branches, 1)
 
-                                lhs = lhs.view(-1, embedding_size)
-                                # lhs becomes [1, emb_size]
-                                rel = rel[batch[0]:batch[1]]
-                                rel = rel.view(-1, 1,
-                                           embedding_size).repeat(1, nb_branches, 1)
-                                rel = rel.view(-1, embedding_size)
-                                # rel becomes [1, emb_size]
-
-                                if intersection_num > 0 and 'disj' in env.graph_type:
-                                    raise NotImplementedError
-
-                                if f"rhs_{ind}" not in candidate_cache or last_step:
-                                    # z_scores is the scores of all entities to be the 
-                                    # rhs and rhs_3d is their embeddings ([1,no_entity, emb_size])
-                                    z_scores, rhs_3d = self.get_best_candidates(
-                                    rel, lhs, None, candidates, last_step, None)
-                                    z_scores_1d = z_scores.view(-1)
-
-                                    if 'disj' in env.graph_type or scores_normalize:
-                                        z_scores_1d = torch.sigmoid(z_scores_1d)
-
-                                    if not last_step:
-                                        nb_sources = rhs_3d.shape[0] * \
-                                            rhs_3d.shape[1]
-                                        nb_branches = nb_sources // batch_size
-                                    else:
-                                        if ind == indices[0]:
-                                            nb_ent = rhs_3d.shape[1]
-                                        else:
-                                            nb_ent = 1
- 
-                                        # first time the batch scores is None and the z_scores we make it equal to z_scores_1d
-                                        batch_scores = z_scores_1d if batch_scores is None else objective(
-                                            z_scores_1d, batch_scores.view(-1, 1).repeat(1, nb_ent).view(-1), t_norm)
-                                        nb_ent = rhs_3d.shape[1]
-
-                                    candidate_cache[f"rhs_{ind}"] = (batch_scores, rhs_3d)
-
-                                    if ind == indices[0] and 'disj' in env.graph_type:
-                                        raise NotImplementedError
-
-                                    #if ind == indices[-1]:
-                                    #    candidate_cache[f"lhs_{ind+1}"] = (batch_scores, rhs_3d)
-                                else:
-                                    raise NotImplementedError
-                                del lhs, rel, rhs, rhs_3d, z_scores_1d, z_scores
-                                    
-                            # this is for the second part of the chain ([item, rel, tail])
-                            elif ind>0:
+                            if rhs is not None:
                                 rhs = rhs[batch[0]:batch[1]]
                                 rhs = rhs.view(-1, 1,
                                                embedding_size).repeat(1, nb_branches, 1)
                                 rhs = rhs.view(-1, embedding_size)
-                                rel = rel[batch[0]:batch[1]]
-                                rel = rel.view(-1, 1,
+
+                            else:
+                                batch_scores, rhs_3d = candidate_cache[f"rhs_{ind}"]
+                                rhs = rhs_3d.view(-1, embedding_size)
+                                nb_sources = rhs_3d.shape[0]*rhs_3d.shape[1]
+                                nb_branches = nb_sources // batch_size
+
+                            rel = rel[batch[0]:batch[1]]
+                            rel = rel.view(-1, 1,
                                            embedding_size).repeat(1, nb_branches, 1)
-                                rel = rel.view(-1, embedding_size)
+                            rel = rel.view(-1, embedding_size)
 
-                                if intersection_num > 0 and 'disj' in env.graph_type:
-                                    raise NotImplementedError
-                                if f"lhs_{ind}" not in candidate_cache or last_step:
-                                    z_scores, lhs_3d = self.get_best_candidates(
-                                        rel, rhs, None, candidates, last_step, None, 'rhs')
-                                    z_scores_1d = z_scores.view(-1)
+                            # not implemented for now
+                            if intersection_num > 0 and 'disj' in env.graph_type:
+                                batch_scores, lhs_3d = candidate_cache[f"lhs_{ind}"]
+                                lhs = lhs_3d.view(-1, embedding_size)
+                                z_scores = self.score_fixed(
+                                    rel, lhs, rhs, candidates)
 
-                                    if 'disj' in env.graph_type or scores_normalize:
-                                        z_scores_1d = torch.sigmoid(z_scores_1d)
-                                    # TODO: check this
-                                    if not last_step:
-                                        nb_sources = lhs_3d.shape[0] * \
-                                            lhs_3d.shape[1]
-                                        nb_branches = nb_sources // batch_size
-                                    if not last_step:
-                                        batch_scores = z_scores_1d if batch_scores is None else objective(
-                                            z_scores_1d, batch_scores.view(-1, 1).repeat(1, candidates).view(-1), t_norm)
-                                    else:
+                                z_scores_1d = z_scores.view(-1)
+                                if 'disj' in env.graph_type or scores_normalize:
+                                    z_scores_1d = torch.sigmoid(z_scores_1d)
 
-                                        if ind == indices[0]:
-                                            nb_ent = lhs_3d.shape[1]
-                                        else:
-                                            nb_ent = 1
-                                        
-                                        batch_scores = z_scores_1d if batch_scores is None else objective(
-                                            z_scores_1d, batch_scores.view(-1, 1).repeat(1, nb_ent).view(-1), t_norm)
-                                        nb_ent = lhs_3d.shape[1]
-                                    candidate_cache[f"lhs_{ind}"] = (batch_scores, lhs_3d)
+                                batch_scores = z_scores_1d if batch_scores is None else objective(
+                                    z_scores_1d, batch_scores, t_norm)
 
+                                continue
+
+                            if f"lhs_{ind}" not in candidate_cache or last_step:
+                                z_scores, lhs_3d = self.get_best_candidates(
+                                    rel, rhs, None, candidates, last_step, None, 'rhs')
+
+                                # [B * Candidates^K] or [B, S-1, N]
+                                z_scores_1d = z_scores.view(-1)
+                                # print(z_scores_1d)
+                                if 'disj' in env.graph_type or scores_normalize:
+                                    z_scores_1d = torch.sigmoid(z_scores_1d)
+
+                                if not last_step:
+                                    nb_sources = lhs_3d.shape[0] * \
+                                        lhs_3d.shape[1]
+                                    nb_branches = nb_sources // batch_size
+
+                                if not last_step:
+                                    batch_scores = z_scores_1d if batch_scores is None else objective(
+                                        z_scores_1d, batch_scores.view(-1, 1).repeat(1, candidates).view(-1), t_norm)
                                 else:
-                                    raise NotImplementedError
-                                del lhs, rel, rhs, lhs_3d, z_scores_1d, z_scores
-                                
+                                    if ind == indices[0]:
+                                        nb_ent = lhs_3d.shape[1]
+                                    else:
+                                        nb_ent = 1
+
+                                    batch_scores = z_scores_1d if batch_scores is None else objective(
+                                        z_scores_1d, batch_scores.view(-1, 1).repeat(1, nb_ent).view(-1), t_norm)
+                                    nb_ent = lhs_3d.shape[1]
+
+                                candidate_cache[f"lhs_{ind}"] = (
+                                    batch_scores, lhs_3d)
+
+                                if ind == indices[0] and 'disj' in env.graph_type:
+                                    count = len(indices)-1
+                                    iterator = 1
+                                    while count > 0:
+                                        candidate_cache[f"lhs_{indices[intersection_num+iterator]}"] = (
+                                            batch_scores, lhs_3d)
+                                        iterator += 1
+                                        count -= 1
+
+                                if ind == indices[-1]:
+                                    candidate_cache[f"rhs_{ind+1}"] = (
+                                        batch_scores, lhs_3d)
+                            else:
+                                batch_scores, lhs_3d = candidate_cache[f"lhs_{ind}"]
+                                candidate_cache[f"rhs_{ind+1}"] = (
+                                    batch_scores, lhs_3d)
+
+                                last_hop = True
+                                del rhs, rel
+                                continue
+
+                            del lhs, rel, rhs, lhs_3d, z_scores_1d, z_scores
+
             if batch_scores is not None:
+                # [B * entites * S ]
+                # S ==  K**(V-1)
 
                 scores_2d = batch_scores.view(batch_size, -1, nb_ent)
+
+                # [1,candidates, nb_ent]
+                # res is the max score for each entity among the candidates
                 res, _ = torch.max(scores_2d, dim=1)
                 scores = res if scores is None else torch.cat([scores, res])
+
                 del batch_scores, scores_2d, res, candidate_cache
 
             else:
                 assert False, "Batch Scores are empty: an error went uncaught."
             res = scores
 
+        # res has the score of each entity for each query
         return res
 
 
@@ -2055,7 +2452,7 @@ class KBCModel(nn.Module, ABC):
                                     batch_scores, rhs_3d)
                                 last_hop = True
                                 del lhs, rel
-                                # #torch.cuda.empty_cache()
+                                # #torch.cuda.empty_cache() 
                                 continue
 
                             last_hop = True
@@ -2302,37 +2699,64 @@ class SimplE(KBCModel):
             torch.sqrt(rel[0] ** 2 + rel[1] ** 2),
             torch.sqrt(rhs[0] ** 2 + rhs[1] ** 2)
         )
+    
+    def get_rank_distance(self, dist_mean_f, dist_mean_inv, candidate_ent):
+        #candidate_emb = self.entity_embeddings(torch.tensor(candidate_ent))
+        #candidate = candidate_emb[:self.rank], candidate_emb[self.rank:]
+
+        to_score = self.embeddings[0].weight
+        for_score = dist_mean_f @ to_score[0].transpose(0,1)
+        inv_score = dist_mean_inv @ to_score[1].transpose(0,1)
+        score = for_score + inv_score
+        score_candidate = score[0][candidate_ent]
+        rcount = (score[0] > score_candidate).sum().item() + 1
+        return rcount
+
 
     def forward_emb(self, lhs, rel):
+
         lhs = lhs[:, :self.rank], lhs[:, self.rank:]
         rel = rel[:, :self.rank], rel[:, self.rank:]
-
-        to_score = self.embeddings[0].weight
-        to_score = to_score[:, :self.rank], to_score[:, self.rank:]
-        # to_score is all entities in tail
-        for_prod = (lhs[0] * rel[0]) @ to_score[1].transpose(0, 1)
-        inv_prod = (lhs[1] * rel[1]) @ to_score[0].transpose(0, 1)
-        #print(torch.argmax(for_prod[0]))
+        #print(rel[0]* self.embeddings[0].weight[1][self.rank:])
         #sys.exit()
-        return torch.clamp((for_prod + inv_prod)/2, min=-20, max=20)
+        
+        to_score_initial = self.embeddings[0].weight
+
+        to_score_for = rel[1] * to_score_initial[:, :self.rank]
+        to_score_inv = rel[0] * to_score_initial[:, self.rank:]
+        to_score = F.normalize(to_score_for, p=2.0, dim = 1), F.normalize(to_score_inv, p=2.0, dim = 1)
+        # to_score is all entities in tail
+        #for_prod = (lhs[0] * rel[0]) @ to_score[1].transpose(0, 1)
+        #inv_prod = (lhs[1] * rel[1]) @ to_score[0].transpose(0, 1)
+        for_prod = lhs[0] @ to_score[1].transpose(0,1)
+        inv_prod = lhs[1] @ to_score[0].transpose(0,1)
+        #return torch.clamp((for_prod + inv_prod)/2, min=-20, max=20)
+        return (for_prod + inv_prod)/2
     
-    def forward_emb_norel(self, lhs):
-        lhs = lhs[:, :self.rank], lhs[:, self.rank:]
-        to_score = self.embeddings[0].weight
-        to_score = to_score[:, :self.rank], to_score[:, self.rank:]
-        for_prod = (lhs[0]) @ to_score[1].transpose(0, 1)
-        inv_prod = (lhs[1]) @ to_score[0].transpose(0, 1)
-        return torch.clamp((for_prod + inv_prod)/2, min=-20, max=20)
+    # def forward_emb_norel(self, lhs):
+    #     lhs = lhs[:, :self.rank], lhs[:, self.rank:]
+    #     to_score = self.embeddings[0].weight
+    #     to_score = to_score[:, :self.rank], to_score[:, self.rank:]
+    #     for_prod = (lhs[0]) @ to_score[1].transpose(0, 1)
+    #     inv_prod = (lhs[1]) @ to_score[0].transpose(0, 1)
+    #     return torch.clamp((for_prod + inv_prod)/2, min=-20, max=20)
     
     def backward_emb(self, rhs, rel):
         rhs = rhs[:, :self.rank], rhs[:, self.rank:]
         rel = rel[:, :self.rank], rel[:, self.rank:]
         to_score = self.embeddings[0].weight
+        #to_score_initial= self.embeddings[0].weight
+        #to_score_for = rel[0] * to_score_initial[:, :self.rank]
+        #to_score_inv = rel[1] * to_score_initial[:, self.rank:]
+        #to_score = F.normalize(to_score_for, p=2.0, dim = 1), F.normalize(to_score_inv, p=2.0, dim = 1)
         to_score = to_score[:, :self.rank], to_score[:, self.rank:]
         # to_score is all entities in head
         for_prod = (rhs[1] * rel[0]) @ to_score[0].transpose(0, 1)
         inv_prod = (rhs[0] * rel[1]) @ to_score[1].transpose(0, 1)
-        return torch.clamp((for_prod + inv_prod)/2, min=-20, max=20)
+        #for_prod = (rhs[1]) @ to_score[0].transpose(0, 1)
+        #inv_prod = (rhs[0]) @ to_score[1].transpose(0, 1)
+        #return torch.clamp((for_prod + inv_prod)/2, min=-20, max=20)
+        return (for_prod + inv_prod)/2
 
     def get_rhs(self, chunk_begin: int, chunk_size: int):
         return self.embeddings[0].weight.data[

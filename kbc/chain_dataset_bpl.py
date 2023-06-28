@@ -74,13 +74,13 @@ class ChaineDataset():
             self.neighbour_relations
             self.__reverse_maps__()
             # current chains: 1_2, 2_2, 2_3, 1_3, 1_4
-            #self.__type1_2chains__()
-            #self.__type2_2chains__()
-            #self.__type1_3chains__()
-            #self.__type1_4chains__()
-            #self.__type2_3chains__()
+            self.__type1_2chains__()
+            self.__type2_2chains__()
+            self.__type1_3chains__()
+            self.__type1_4chains__()
+            self.__type2_3chains__()
             self.__type3_3chains__()
-            #self.__type4_3chains__() 
+            self.__type4_3chains__() 
 
         except RuntimeError as e:
             print(e)
@@ -402,8 +402,8 @@ class ChaineDataset():
                         self.type1_3chain.append(new_chain)
                         if len(self.type1_3chain) > self.threshold:
                             print(f'1_3:{len(self.type1_3chain)}')
-                            for chain in  self.type1_3chain[:20]:
-                                print(chain.data['raw_chain']) 
+                            #for chain in  self.type1_3chain[:20]:
+                            #    print(chain.data['raw_chain']) 
                             print("Threshold for sample amount reached")
                             print("Finished sampling chains with legth 3 of type 1")
                             return
@@ -542,8 +542,8 @@ class ChaineDataset():
                         self.type1_4chain.append(new_chain)
                         if len(self.type1_4chain) > self.threshold:
                             print(f'1_4:{len(self.type1_4chain)}')
-                            #for chain in  self.type1_3chain[:20]:
-                                #print(chain.data['raw_chain']) 
+                            #for chain in  self.type1_4chain[:20]:
+                            #    print(chain.data['raw_chain']) 
                             print("Threshold for sample amount reached")
                             print("Finished sampling chains with legth 4 of type 1")
                             return
@@ -691,6 +691,8 @@ class ChaineDataset():
                         if len(self.type3_3chain) > self.threshold:
                             print((f'3_3:{len(self.type3_3chain)}'))
                             print("Threshold for sample amount reached")
+                            #for chain in  self.type3_3chain[:20]:
+                            #    print(chain.data['raw_chain']) 
                             print("Finished sampling chains with legth 3 of type 3")
                             return
             print("Finished sampling chains with legth 3 of type 3")
@@ -704,6 +706,7 @@ class ChaineDataset():
         try:
             # first part of the chain is the same as in 2p (user, item, sth)
             for test_triple in tqdm(self.raw_data.data['test_with_kg'][1060617:]):
+            #for test_triple in tqdm(self.raw_data.data['test_with_kg'][:1060617]):
                 # the rest is like a normal 2 i (not with item as the connector node)
 
                 if test_triple[1] == self.likes_rel and test_triple[2] in self.reverse_maps:
@@ -753,7 +756,7 @@ class ChaineDataset():
                         break
                     # raw_chains = [[[user, likes, item], [item, rel, tail1], [tail1, rel, tail2], [tail1, rel , tail3]]]
                     raw_chains = [[[user, self.likes_rel, item], second_part_chain, list(x[0]), list(x[1])] for x in common_lhs_clean]
-                    print(raw_chains)
+                    #print(raw_chains)
 
                     for chain in raw_chains:
                         new_chain = Chain()
@@ -769,6 +772,8 @@ class ChaineDataset():
                         self.type4_3chain.append(new_chain)
                         if len(self.type4_3chain) > self.threshold:
                             print((f'4_3:{len(self.type4_3chain)}'))
+                            #for chain in  self.type4_3chain[:20]:
+                            #    print(chain.data['raw_chain']) 
                             print("Threshold for sample amount reached")
                             print("Finished sampling chains with legth 3 of type 4")
                             return
