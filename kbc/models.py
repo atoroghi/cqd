@@ -8,8 +8,9 @@
 from abc import ABC, abstractmethod
 from typing import Tuple, List, Dict, Optional, Callable
 import math
-import sys
+import sys, os
 import logging
+import pickle
 
 import torch
 from torch import nn
@@ -1260,6 +1261,72 @@ class KBCModel(nn.Module, ABC):
 
 
         return scores
+    
+    def query_answering_BF_Sanity(self, env: DynKBCSingleton, candidates: int = 5, t_norm: str = 'min', 
+    batch_size=1, scores_normalize=0, explain='no', cov_anchor=1e-2, cov_var=1e-2, cov_target=1e-2):
+
+        parts = env.parts
+        chains, chain_instructions = env.chains, env.chain_instructions
+        intact_parts = env.intact_parts
+        nb_queries, emb_dim = chains[1][2].shape[0], chains[1][2].shape[1]
+        possible_heads_emb = env.possible_heads_emb; possible_tails_emb = env.possible_tails_emb
+        user_embs = torch.empty((nb_queries, emb_dim), device=Device)  
+        if env.graph_type == '1_2':
+            path = os.path.join(os.getcwd(), 'data', 'Movielens_twohop')
+            with open(os.path.join(path, 'train.txt.pickle'), 'rb') as f:
+                train = pickle.load(f)
+            with open(os.path.join(path, 'test.txt.pickle'), 'rb') as f:
+                test = pickle.load(f)
+            with open(os.path.join(path, 'valid.txt.pickle'), 'rb') as f:
+                valid = pickle.load(f)
+            all_data = np.concatenate((train,test, valid), axis=0)
+            #print(np.where((all_data[:,1]==28) & (all_data[:,2]==17746)))
+            #sys.exit()
+            part1 , part2 = parts[0], parts[1]
+            intact_part1, intact_part2 = intact_parts[0], intact_parts[1]
+
+            chain1, chain2 = chains[0], chains[1]
+
+            lhs_1_emb, rel_1_emb, rhs_1_emb, lhs_2_emb, rel_2_emb, rhs_2_emb = chain1[0], chain1[1], chain1[2], chain2[0], chain2[1], chain2[2]
+
+            if not 'SimplE' in str(self.model_type):
+                raise NotImplementedError
+            else:
+                gt_ranks = []
+                num_leg_lhss = []
+                top_ten_trues = []
+                for i in tqdm.tqdm(range(nb_queries // 5)):
+
+                    for j in range(5):
+                        # lhs_1 is the user belief. rhs_2 is the evidence embedding
+                        tail_id = intact_part2[i*5+j][2][0]
+                        rel_id = intact_part2[i*5+j][1]
+                        gt_id = intact_part2[i*5+j][0]
+                        leg_lhss = all_data[np.where((all_data[:,2] == tail_id)& (all_data[:,1]==rel_id))][:,0]
+
+                        num_leg_lhs = (np.where((all_data[:,2] == tail_id)& (all_data[:,1]==rel_id)))[0].shape[0]
+                        num_leg_lhss.append(num_leg_lhs)
+                        
+                        #lhs_1, rel_1, rhs_1 = lhs_1_emb[i*5+j], rel_1_emb[i*5+j], None
+                        lhs_2, rel_2, rhs_2 = None, rel_2_emb[i*5+j], rhs_2_emb[i*5+j]
+                        gt = torch.tensor((intact_part1[i*5+j][2].astype(np.int32))) 
+                        scores_m = self.backward_emb(rhs_2.unsqueeze(dim=0),rel_2.unsqueeze(dim=0))
+                        gt_rank = (scores_m[0] > scores_m[0][gt]).sum().item() + 1
+                        gt_ranks.append(gt_rank)
+
+                        top_ten_true = 0
+
+                        top_scores, top_indices = torch.topk(scores_m, k=10, dim=1)
+                        for top in top_indices[0]:
+                            if top.item() in leg_lhss:
+                                top_ten_true += 1
+                        top_ten_trues.append(top_ten_true)
+                print("average gt rank: ", np.mean(np.array(gt_ranks)))
+                fraction = np.sum(np.array(gt_ranks) < 10) / len(np.array(gt_ranks))
+                print("fraction of gt rank < 10: ", fraction)
+                print("average legitimate lhs: ", np.mean(np.array(num_leg_lhss)))
+                print("average top ten scored candidates in true lhss: ", np.mean(np.array(top_ten_trues)))
+                sys.exit()
 
 
     def query_answering_BF_Marginal_UI(self, env: DynKBCSingleton, candidates: int = 5, t_norm: str = 'min', 
@@ -1273,9 +1340,13 @@ class KBCModel(nn.Module, ABC):
         chains, chain_instructions = env.chains, env.chain_instructions
         intact_parts = env.intact_parts
         nb_queries, emb_dim = chains[0][0].shape[0], chains[0][0].shape[1]
-        possible_heads_emb = env.possible_heads_emb; possible_tails_emb = env.possible_tails_emb
-        
-        user_embs = torch.empty((nb_queries, emb_dim), device=Device)
+        scores_m = self.backward_emb(rhs_2.unsqueeze(dim=0),rel_2.unsqueeze(dim=0))
+        print(torch.argmax(scores_m))
+        rcount = (scores_m[0] > scores_m[0][gt]).sum().item() + 1
+        print(rcount)
+        z_scores, z_indices = torch.topk(scores_m, k=10, dim=1)
+        print(z_indices)
+        sys.exit()
 
         if env.graph_type == '1_2':
             part1 , part2 = parts[0], parts[1]
@@ -1293,6 +1364,7 @@ class KBCModel(nn.Module, ABC):
                         # lhs_1 is the user belief. rhs_2 is the evidence embedding
                         lhs_1, rel_1, rhs_1 = lhs_1_emb[i*5+j], rel_1_emb[i*5+j], None
                         lhs_2, rel_2, rhs_2 = None, rel_2_emb[i*5+j], rhs_2_emb[i*5+j]
+                        gt = torch.tensor((intact_part1[i*5+j][2].astype(np.int32)))
                         ### sanity check
                         #print("gt:", intact_part1[i*5+j][2].astype(np.int32))
                         #mu_gt = self.entity_embeddings(torch.tensor((intact_part1[i*5+j][2].astype(np.int32))))
@@ -1349,6 +1421,14 @@ class KBCModel(nn.Module, ABC):
                         mu_m_for = h_m_for / J_m_for
                         J_m_inv = (1/cov_anchor) + (1/cov_var)
                         mu_m_inv = h_m_inv / J_m_inv
+
+                        scores_m = self.backward_emb(rhs_2.unsqueeze(dim=0),rel_2.unsqueeze(dim=0))
+                        print(torch.argmax(scores_m))
+                        rcount = (scores_m[0] > scores_m[0][gt]).sum().item() + 1
+                        print(rcount)
+                        z_scores, z_indices = torch.topk(scores_m, k=10, dim=1)
+                        print(z_indices)
+                        sys.exit()
                         ### update the precision and information of the target node given the variable
                         if j == 0:
                            #mu_u = torch.unsqueeze(lhs_1, dim=0)
@@ -1365,14 +1445,14 @@ class KBCModel(nn.Module, ABC):
                            #print("rcount_pre:", rcount_pre)
                         #print(h_u_for)
 
-                        h_u_for = h_u_for - rel_1[:emb_dim//2] * (1 / J_m_inv) * h_m_inv
-                        J_u_for = J_u_for - rel_1[:emb_dim//2] * (1 / J_m_inv) * rel_1[:emb_dim//2]
-                        h_u_inv = h_u_inv - rel_1[emb_dim//2:] * (1 / J_m_for) * h_m_for
-                        J_u_inv = J_u_inv - rel_1[emb_dim//2:] * (1 / J_m_for) * rel_1[emb_dim//2:]
-                        # h_u_for = h_u_for + h_m_inv * rel_1[:emb_dim//2]
-                        # h_u_inv = h_u_inv + h_m_for * rel_1[emb_dim//2:]
-                        # J_u_for = J_u_for + J_m_inv
-                        # J_u_inv = J_u_inv + J_m_for
+                        # h_u_for = h_u_for - rel_1[:emb_dim//2] * (1 / J_m_inv) * h_m_inv
+                        # J_u_for = J_u_for - rel_1[:emb_dim//2] * (1 / J_m_inv) * rel_1[:emb_dim//2]
+                        # h_u_inv = h_u_inv - rel_1[emb_dim//2:] * (1 / J_m_for) * h_m_for
+                        # J_u_inv = J_u_inv - rel_1[emb_dim//2:] * (1 / J_m_for) * rel_1[emb_dim//2:]
+                        h_u_for = h_u_for + h_m_inv * rel_1[:emb_dim//2]
+                        h_u_inv = h_u_inv + h_m_for * rel_1[emb_dim//2:]
+                        J_u_for = J_u_for + J_m_inv
+                        J_u_inv = J_u_inv + J_m_for
                         
                         mu_u_for = h_u_for / J_u_for
                         mu_u_inv = h_u_inv / J_u_inv
@@ -1456,15 +1536,16 @@ class KBCModel(nn.Module, ABC):
                             h_u_inv = (1/cov_target) * mu_u_inv
                             J_u_for = (1/cov_target)
                             J_u_inv = (1/cov_target)
-
                         h_u_for = h_u_for - rel_1[:emb_dim//2] * (1 / J_m1_inv) * h_m1_inv
+
+                        
                         J_u_for = J_u_for - rel_1[:emb_dim//2] * (1 / J_m1_inv) * rel_1[:emb_dim//2]
                         h_u_inv = h_u_inv - rel_1[emb_dim//2:] * (1 / J_m1_for) * h_m1_for
                         J_u_inv = J_u_inv - rel_1[emb_dim//2:] * (1 / J_m1_for) * rel_1[emb_dim//2:]
                         # h_u_for = h_u_for + h_m1_inv
                         # h_u_inv = h_u_inv + h_m1_for
-                        mu_u_for = h_u_for / J_u_for
-                        mu_u_inv = h_u_inv / J_u_inv
+                        # mu_u_for = h_u_for / J_u_for
+                        # mu_u_inv = h_u_inv / J_u_inv
 
                         user_embs[i*5+j, :emb_dim//2] = mu_u_for
                         user_embs[i*5+j, emb_dim//2:] = mu_u_inv
@@ -1550,6 +1631,7 @@ class KBCModel(nn.Module, ABC):
 
         elif env.graph_type == '2_2':
             part1, part2, part3 = parts[0], parts[1], parts[2]
+            intact_part1, intact_part2, intact_part3 = intact_parts[0], intact_parts[1], intact_parts[2]
             chain1, chain2, chain3 = chains[0], chains[1], chains[2]
             lhs_1_emb, rel_1_emb, rhs_1_emb, lhs_2_emb, rel_2_emb, rhs_2_emb, lhs_3_emb, rel_3_emb, rhs_3_emb = chain1[0], chain1[1], chain1[2], chain2[0], chain2[1], chain2[2], chain3[0], chain3[1], chain3[2]
 
@@ -1562,27 +1644,48 @@ class KBCModel(nn.Module, ABC):
                         lhs_1, rel_1, rhs_1 = lhs_1_emb[i*5+j], rel_1_emb[i*5+j], None
                         lhs_2, rel_2, rhs_2 = None, rel_2_emb[i*5+j], rhs_2_emb[i*5+j]
                         lhs_3, rel_3, rhs_3 = None, rel_3_emb[i*5+j], rhs_3_emb[i*5+j]
-
+                        mu_gt = self.entity_embeddings(torch.tensor((intact_part1[i*5+j][2].astype(np.int32))))
+                        mu_gt_for = mu_gt[:emb_dim//2]
+                        mu_gt_inv = mu_gt[emb_dim//2:]
                         mu_m_for = possible_tails_emb[0][i*5+j, :emb_dim//2]
                         h_m_for = (1/cov_var) * mu_m_for
                         mu_m_inv = possible_tails_emb[0][i*5+j, emb_dim//2:]
                         h_m_inv = (1/cov_var) * mu_m_inv
-
+                        # print("dist between mu_gt and mu_m")
+                        # print(torch.cdist(mu_gt_for.unsqueeze(dim=0), mu_m_for.unsqueeze(dim=0), p=2))
+                        # print(torch.cdist(mu_gt_inv.unsqueeze(dim=0), mu_m_inv.unsqueeze(dim=0), p=2))
+                        
                         mu_d_for1 = rhs_2[:emb_dim//2] * rel_2[emb_dim//2:]
-                        h_d_for1 = (1/cov_anchor) * mu_d_for1
+                        #h_d_for1 = (1/cov_anchor) * mu_d_for1
                         mu_d_inv1 = rhs_2[emb_dim//2:] * rel_2[:emb_dim//2]
-                        h_d_inv1 = (1/cov_anchor) * mu_d_inv1
+                        #h_d_inv1 = (1/cov_anchor) * mu_d_inv1
                         mu_d_for2 = rhs_3[:emb_dim//2] * rel_3[emb_dim//2:]
-                        h_d_for2 = (1/cov_anchor) * mu_d_for2
+                        #h_d_for2 = (1/cov_anchor) * mu_d_for2
                         mu_d_inv2 = rhs_3[emb_dim//2:] * rel_3[:emb_dim//2]
-                        h_d_inv2 = (1/cov_anchor) * mu_d_inv2
+                        #h_d_inv2 = (1/cov_anchor) * mu_d_inv2
+                        mu_d_for = mu_d_for1 + mu_d_for2
+                        mu_d_inv = mu_d_inv1 + mu_d_inv2
+                        h_d_for = (1/cov_anchor) * mu_d_for
+                        h_d_inv = (1/cov_anchor) * mu_d_inv
+                        # print("dist between mu_d and mu_m")
+                        # print(torch.cdist(mu_m_for.unsqueeze(dim=0), mu_d_inv.unsqueeze(dim=0), p=2))
+                        # print(torch.cdist(mu_m_inv.unsqueeze(dim=0), mu_d_for.unsqueeze(dim=0), p=2))
+                        
 
-                        h_m_for = h_m_for + h_d_inv1 + h_d_inv2
+                        h_m_for = h_m_for + h_d_inv
                         J_m_for = (1/cov_var) + (1/cov_anchor) + (1/cov_anchor)
-                        h_m_inv = h_m_inv + h_d_for1 + h_d_for2
+                        h_m_inv = h_m_inv + h_d_for
                         J_m_inv = (1/cov_var) + (1/cov_anchor) + (1/cov_anchor)
                         mu_m_for = h_m_for / J_m_for
                         mu_m_inv = h_m_inv / J_m_inv
+                        # print("dist between mu_d and mu_m after update")
+                        # print(torch.dist(mu_m_for.unsqueeze(dim=0), mu_d_inv.unsqueeze(dim=0), p=2))
+                        # print(torch.dist(mu_m_inv.unsqueeze(dim=0), mu_d_for.unsqueeze(dim=0), p=2))
+
+                        # print("dist between mu_gt and mu_m after update")
+                        # print(torch.dist(mu_gt_for.unsqueeze(dim=0), mu_m_for.unsqueeze(dim=0), p=2))
+                        # print(torch.dist(mu_gt_inv.unsqueeze(dim=0), mu_m_inv.unsqueeze(dim=0), p=2))
+                        # sys.exit()
 
                         # update user belief
                         if j==0:
@@ -1594,15 +1697,17 @@ class KBCModel(nn.Module, ABC):
                             J_u_for = (1/cov_target)
                             J_u_inv = (1/cov_target)
 
-                        h_u_for = h_u_for - rel_1[:emb_dim//2] * (1 / J_m_inv) * h_m_inv
-                        J_u_for = J_u_for - rel_1[:emb_dim//2] * (1 / J_m_inv) * rel_1[:emb_dim//2]
-                        h_u_inv = h_u_inv - rel_1[emb_dim//2:] * (1 / J_m_for) * h_m_for
-                        J_u_inv = J_u_inv - rel_1[emb_dim//2:] * (1 / J_m_for) * rel_1[emb_dim//2:]
+                        # h_u_for = h_u_for - rel_1[:emb_dim//2] * (1 / J_m_inv) * h_m_inv
+                        # J_u_for = J_u_for - rel_1[:emb_dim//2] * (1 / J_m_inv) * rel_1[:emb_dim//2]
+                        # h_u_inv = h_u_inv - rel_1[emb_dim//2:] * (1 / J_m_for) * h_m_for
+                        # J_u_inv = J_u_inv - rel_1[emb_dim//2:] * (1 / J_m_for) * rel_1[emb_dim//2:]
 
                         # h_u_for = h_u_for + h_m_inv; h_u_inv = h_u_inv + h_m_for
                         # J_u_for = J_u_for + (1/cov_var); J_u_inv = J_u_inv + (1/cov_var)
-                        mu_u_for = h_u_for / J_u_for
-                        mu_u_inv = h_u_inv / J_u_inv
+                        # mu_u_for = h_u_for / J_u_for
+                        # mu_u_inv = h_u_inv / J_u_inv
+
+
 
                         user_embs[i*5+j, :emb_dim//2] = mu_u_for
                         user_embs[i*5+j, emb_dim//2:] = mu_u_inv
@@ -1882,7 +1987,7 @@ class KBCModel(nn.Module, ABC):
                     user_embs[i*5+j, :emb_dim//2] = mu_u_for
                     user_embs[i*5+j, emb_dim//2:] = mu_u_inv
                 
-            scores = self.forward_emb(user_embs, rel_1_emb)
+            scores = self.forward_emb(user_embs, rel_1_emb[0].unsqueeze(dim=0))
         
 
 
@@ -2342,8 +2447,163 @@ class KBCModel(nn.Module, ABC):
         # res has the score of each entity for each query
         return res
 
+    def query_answering_Bayesian1(self, env: DynKBCSingleton, candidates: int = 5, t_norm: str = 'min', batch_size=1, scores_normalize=0, explain=False,
+    cov_anchor=None, cov_var=None, cov_target=None):
+        
+        if env.graph_type == '1_2_seq':
+            last_step = False
+            gt_targets = env.target_ids_hard
 
-      
+            chains = env.chains
+            chain1 , chain2, chain3, chain4 = chains
+            seq_chains = [chain1, chain2, chain3]
+            nb_queries, embedding_size = chains[0][0].shape[0], chains[0][0].shape[1]
+            # one dimension for each seq. each seq has no_queries * entities dims
+            scores = torch.empty((3, nb_queries, self.sizes[0])).to(chains[0][0].device)
+
+            for i in tqdm.tqdm(range(nb_queries)):
+                gts = list(gt_targets.values())[i]               
+                for seq in range(3):
+                    if seq==0:
+                        target_emb = torch.zeros((1, embedding_size)).to(chains[0][0].device)
+                    # chain is (anchor_emb, rel1_emb, None) in all cases
+                    chain = seq_chains[seq]
+                    lhs, rel, rhs = chain
+                    lhs = lhs[i].view(-1, embedding_size)
+                    rel = rel[i].view(-1, embedding_size)
+                    # z_scores is the scores of top candidates and rhs_3d is the embeddings of top candidates
+                    z_scores, rhs_3d = self.get_best_candidates(
+                        rel, lhs, None, candidates, last_step, None)
+                    # this is the mean of most likely variable candidates used as evidence
+                    rhs_2d_mean = torch.mean(rhs_3d[0], dim=0).view(1, embedding_size)
+                    rel_2 = (chain4[1][i]).view(1, embedding_size)
+                    evidence_mean = rhs_2d_mean * rel_2
+                    target_emb = (1 /(cov_anchor + candidates * cov_target)) * ((cov_anchor)*target_emb + (candidates * cov_target)*evidence_mean)
+                    cov_target = (cov_target * cov_anchor) /(cov_anchor + candidates * cov_target)
+                    rel_virtual = torch.ones_like(target_emb)
+                    ent_scores = self.forward_emb(target_emb, rel_virtual)
+                    scores[seq][i] = ent_scores.view(-1)
+                    #gt_ranks = []
+                    #for gt in gts:
+                    #    rank_gt = (ent_scores[0] > ent_scores[0][gt]).sum().item() + 1
+                    #    gt_ranks.append(rank_gt)
+                    #print(np.mean(gt_ranks))
+                #sys.exit()
+        
+        elif env.graph_type == '1_3_seq':
+            raise NotImplementedError
+            # chains = env.chains
+            # env.chain_instructions = ['hop_0_1']
+            # # (all embeddings) chain1, chain2, and chain3 are the 3 anchors related to the var and chain4 is the first hop
+            # chain1 , chain2, chain3, chain4, chain5 = chains
+            # seq_chains = [chain1, chain2, chain3]
+            
+            # for seq in range(3):
+            #     new_chain = [seq_chains[seq], chain4]
+            #     env.chains = new_chain
+            #     print((env.chains[0][0].shape))
+            #     sys.exit()
+
+
+
+
+            print(chain1[0].shape)
+            #print((env.chains[0]))
+            sys.exit()
+        return scores
+
+
+    def query_answering_Bayesian2(self, env: DynKBCSingleton, candidates: int = 5, t_norm: str = 'min', batch_size=1, scores_normalize=0, explain=False,
+    cov_anchor=None, cov_var=None, cov_target=None): 
+        if env.graph_type == '1_2_seq':
+            last_step = False
+            chains = env.chains
+            chain1 , chain2, chain3, chain4 = chains
+            seq_chains = [chain1, chain2, chain3]
+            nb_queries, embedding_size = chains[0][0].shape[0], chains[0][0].shape[1]
+            # one dimension for each seq. each seq has no_queries * entities dims
+            scores = torch.empty((3, nb_queries, self.sizes[0])).to(chains[0][0].device)
+            for i in tqdm.tqdm(range(nb_queries)): 
+                for seq in range(3):
+                    if seq==0:
+                        target_emb = torch.zeros((1, embedding_size)).to(chains[0][0].device)
+                    # remember that each chain is a tuple of lhs, rel, rhs embeddings for all queries
+                    chain = seq_chains[seq]
+                    new_chain = [(chain[0][i].view(1,-1), chain[1][i].view(1,-1), chain[2]), (chain4[0], chain4[1][i].view(1,-1), chain4[2])]
+                    env.chains = new_chain
+                    env.chain_instructions = ['hop_0_1']
+                    scores_query = self.query_answering_BF(env, candidates, t_norm, batch_size, scores_normalize, explain)
+                    _, top_answer_indices = torch.topk(scores_query, candidates, dim=1)
+                    top_answer_embeddings = self.entity_embeddings(top_answer_indices[0])
+                    evidence_mean = torch.mean(top_answer_embeddings, dim=0).view(1, embedding_size)
+                    target_emb = (1 /(cov_anchor + candidates * cov_target)) * ((cov_anchor)*target_emb + (candidates * cov_target)*evidence_mean)
+                    cov_target = (cov_target * cov_anchor) /(cov_anchor + candidates * cov_target)
+                    rel_virtual = torch.ones_like(target_emb)
+                    ent_scores = self.forward_emb(target_emb, rel_virtual)
+                    scores[seq][i] = ent_scores.view(-1)
+
+        elif env.graph_type == '1_3_seq':
+            raise NotImplementedError
+
+
+        return scores    
+    def query_answering_Bayesian3(self, env: DynKBCSingleton, candidates: int = 5, t_norm: str = 'min', batch_size=1, scores_normalize=0, explain=False,
+    cov_anchor=None, cov_var=None, cov_target=None):
+            if env.graph_type == '1_2_seq':
+                last_step = False
+                chains = env.chains
+                chain1 , chain2, chain3, chain4 = chains
+                seq_chains = [chain1, chain2, chain3]
+                nb_queries, embedding_size = chains[0][0].shape[0], chains[0][0].shape[1]
+                # one dimension for each seq. each seq has no_queries * entities dims
+                scores = torch.empty((3, nb_queries, self.sizes[0])).to(chains[0][0].device)
+                for i in tqdm.tqdm(range(nb_queries)): 
+                    for seq in range(3):
+                        if seq==0:
+                            target_emb = torch.zeros((1, embedding_size)).to(chains[0][0].device)
+                            var_emb = torch.zeros((1, embedding_size)).to(chains[0][0].device)
+                        # remember that each chain is a tuple of lhs, rel, rhs embeddings for all queries
+                        chain = seq_chains[seq]
+                        evidence_emb = (chain[0][i] * chain[1][i]).view(1,-1)
+                        var_emb = (1 /(cov_anchor +  cov_var)) * ((cov_anchor)*var_emb + (cov_var)*evidence_emb)
+                        cov_var = (cov_var * cov_anchor) /(cov_anchor + cov_var)
+                        target_emb = (1 /(cov_var + cov_target)) * ((cov_var)*target_emb + (cov_target)*var_emb)
+                        cov_target = (cov_target * cov_var) /(cov_anchor + cov_var)
+                        rel_virtual = torch.ones_like(target_emb)
+                        ent_scores = self.forward_emb(target_emb, rel_virtual)
+                        scores[seq][i] = ent_scores.view(-1)
+
+            return scores
+    def query_answering_Bayesian4(self, env: DynKBCSingleton, candidates: int = 5, t_norm: str = 'min', batch_size=1, scores_normalize=0, explain=False,
+    cov_anchor=None, cov_var=None, cov_target=None):
+            if env.graph_type == '1_2_seq':
+                    last_step = False
+                    chains = env.chains
+                    chain1 , chain2, chain3, chain4 = chains
+                    seq_chains = [chain1, chain2, chain3]
+                    nb_queries, embedding_size = chains[0][0].shape[0], chains[0][0].shape[1]
+                    # one dimension for each seq. each seq has no_queries * entities dims
+                    scores = torch.empty((3, nb_queries, self.sizes[0])).to(chains[0][0].device)
+                    for i in tqdm.tqdm(range(nb_queries)): 
+                        for seq in range(3):
+                            if seq==0:
+                                target_emb = torch.zeros((1, embedding_size)).to(chains[0][0].device)
+                                var_emb = torch.zeros((1, embedding_size)).to(chains[0][0].device)
+                                J_target, J_var, J_anchor = (1/cov_target), (1/cov_var), (1/cov_anchor)
+                                h_target, h_var = torch.zeros((1, embedding_size)).to(chains[0][0].device), torch.zeros((1, embedding_size)).to(chains[0][0].device)
+                                
+                            chain = seq_chains[seq]
+                            evidence_emb = (chain[0][i] * chain[1][i]).view(1,-1)
+                            h_anchor = (1/cov_anchor) * evidence_emb
+                            h_var = h_anchor + h_var
+                            J_var = J_var + J_anchor
+                            h_target = h_target + chain4[1][i] * (1/J_var) * h_var
+                            J_target = J_target + J_var
+                            target_emb = (1/J_target) * h_target
+                            rel_virtual = torch.ones_like(target_emb)
+                            ent_scores = self.forward_emb(target_emb, rel_virtual)
+                            scores[seq][i] = ent_scores.view(-1)
+            return scores
 
     def query_answering_BF(self, env: DynKBCSingleton, candidates: int = 5, t_norm: str = 'min', batch_size=1, scores_normalize=0, explain=False):
 
@@ -2355,13 +2615,13 @@ class KBCModel(nn.Module, ABC):
             objective = self.t_norm
 
         chains, chain_instructions = env.chains, env.chain_instructions
+
         # chain_instructions = ['hop_0_1']
         # chains = [part1, part2]
         # part1 = [lhs_1, rels_1, rhs_1]
         # len(lhs_2) = 8000
 
         nb_queries, embedding_size = chains[0][0].shape[0], chains[0][0].shape[1]
-
         scores = None
 
         # data_loader = DataLoader(dataset=chains, batch_size=16, shuffle=False)
@@ -2381,7 +2641,6 @@ class KBCModel(nn.Module, ABC):
             dnf_flag = False
             if 'disj' in env.graph_type:
                 dnf_flag = True
-
             for inst_ind, inst in enumerate(chain_instructions):
                 with torch.no_grad():
                     # this if for the case of projection
@@ -2592,6 +2851,8 @@ class KBCModel(nn.Module, ABC):
 
             else:
                 assert False, "Batch Scores are empty: an error went uncaught."
+            print('scores_found')
+            sys.exit()
             res = scores
 
         # res has the score of each entity for each query

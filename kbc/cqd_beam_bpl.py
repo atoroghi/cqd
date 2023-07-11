@@ -105,6 +105,12 @@ explain=False, user_likes=None,user_likes_train=None, ent_id=None, quantifier=No
         print("fae: cov_target:", cov_target)
         scores = kbc.model.query_answering_BF_instantiated_Fae(env, candidates, non_items_array, user_likes_train,
     cov_anchor=1e-2, cov_var=1e-2, cov_target=1e-2, lam=0.5)
+    elif quantifier == 'sanity':
+        print("Sanity UI: cov_anchor:", cov_anchor)
+        print("Sanity UI: cov_var:", cov_var)
+        print("Sanity UI: cov_target:", cov_target)
+        scores = kbc.model.query_answering_BF_Sanity(env, candidates, t_norm=t_norm ,
+         batch_size=1, scores_normalize = scores_normalize, explain=explain, cov_anchor=cov_anchor, cov_var=cov_var, cov_target=cov_target)
     
     test_ans_hard = env.target_ids_hard
     test_ans = 	env.target_ids_complete
@@ -129,7 +135,7 @@ if __name__ == "__main__":
 
     t_norms = ['min', 'product']
     normalize_choices = ['0', '1']
-    quantifiers = ['existential', 'marginal_i', 'marginal_ui', 'fae_test']
+    quantifiers = ['existential', 'marginal_i', 'marginal_ui', 'fae_test', 'sanity']
 
     parser = argparse.ArgumentParser(
     description="Complex Query Decomposition - Beam"
@@ -185,11 +191,12 @@ if __name__ == "__main__":
     mode = args.mode
 
     data_hard_path = osp.join(args.path, f'{dataset}_{mode}_hard.pkl')
-    #data_complete_path = osp.join(args.path, f'{dataset}_{mode}_complete.pkl')
+    data_complete_path = osp.join(args.path, f'{dataset}_{mode}_complete.pkl')
     #print(data_complete_path)
     #sys.exit()
 
     data_hard = pickle.load(open(data_hard_path, 'rb'))
+
     #data_complete = pickle.load(open(data_complete_path, 'rb'))
     valid_heads_path = osp.join(args.path, 'kbc_data','valid_heads.pickle')
     valid_heads = pickle.load(open(valid_heads_path, 'rb'))
