@@ -191,7 +191,7 @@ if __name__ == "__main__":
     mode = args.mode
 
     data_hard_path = osp.join(args.path, f'{dataset}_{mode}_hard.pkl')
-    data_complete_path = osp.join(args.path, f'{dataset}_{mode}_complete.pkl')
+    #data_complete_path = osp.join(args.path, f'{dataset}_{mode}_complete.pkl')
     #print(data_complete_path)
     #sys.exit()
 
