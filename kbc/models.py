@@ -2339,6 +2339,7 @@ class KBCModel(nn.Module, ABC):
 
                             # and ind == indices[0]
                             last_step = (inst_ind == len(chain_instructions)-1)
+                            last_seq_step = (inst_ind % 2 == 1)
 
                             lhs, rel, rhs = chains[ind]
 
@@ -2517,12 +2518,123 @@ class KBCModel(nn.Module, ABC):
                     scores_var = self.query_answering_BF(new_env, candidates=candidates, t_norm=t_norm, batch_size=batch_size, scores_normalize=scores_normalize, explain=explain)
                     _, top_var_indices = torch.topk(scores_var, candidates, dim=1)
                     top_var_embeddings = self.entity_embeddings(top_var_indices[0])
-                    evidence_mean = torch.mean(top_var_embeddings, dim=0).view(1, embedding_size)
+                    evidence_mean = (torch.mean(top_var_embeddings, dim=0).view(1, embedding_size)) * (chain5[1][i].view(1, embedding_size))
                     target_emb = (1 /(cov_anchor + candidates * cov_target)) * ((cov_anchor)*target_emb + (candidates * cov_target)*evidence_mean)
                     cov_target = (cov_target * cov_anchor) /(cov_anchor + candidates * cov_target)
                     rel_virtual = torch.ones_like(target_emb)
                     ent_scores = self.forward_emb(target_emb, rel_virtual)
                     scores[seq][i] = ent_scores.view(-1)
+
+        elif env.graph_type == '2_2_seq':
+            
+            gt_targets = env.target_ids_hard
+            chains = env.chains
+            chain1 , chain2, chain3, chain4, chain5, chain6 = chains
+            nb_queries, embedding_size = chains[0][0].shape[0], chains[0][0].shape[1]
+            seq_chains = [[chain1, chain2], [chain3, chain4], [chain5, chain6]]
+            scores = torch.zeros((3, nb_queries, self.sizes[0])).to(chains[0][0].device)
+            for i in tqdm.tqdm(range(nb_queries)):
+                gts = list(gt_targets.values())[i]
+                for seq in range(3):
+                    if seq==0:
+                        target_emb = torch.zeros((1, embedding_size)).to(chains[0][0].device)
+                    chain1_seq, chain2_seq = seq_chains[seq]
+                    evidence1 = chain1_seq[0][i].view(1,-1) * chain1_seq[1][i].view(1,-1)
+                    evidence2 = chain2_seq[0][i].view(1,-1) * chain2_seq[1][i].view(1,-1)
+                    evidence_mean = (evidence1 + evidence2) / 2
+                    target_emb = (1 /(cov_anchor + 2 * cov_target)) * ((cov_anchor)*target_emb + (2 * cov_target)*evidence_mean)
+                    cov_target = (cov_target * cov_anchor) /(cov_anchor + 2 * cov_target)
+                    rel_virtual = torch.ones_like(target_emb)
+                    ent_scores = self.forward_emb(target_emb, rel_virtual)
+                    scores[seq][i] = ent_scores.view(-1)
+
+        elif env.graph_type == '2_3_seq':
+            gt_targets = env.target_ids_hard
+            chains = env.chains
+            chain1 , chain2, chain3, chain4, chain5, chain6, chain7, chain8, chain9 = chains
+            nb_queries, embedding_size = chains[0][0].shape[0], chains[0][0].shape[1]
+
+            seq_chains = [[chain1, chain2, chain3], [chain4, chain5, chain6], [chain7, chain8, chain9]]
+            scores = torch.zeros((3, nb_queries, self.sizes[0])).to(chains[0][0].device)
+            for i in tqdm.tqdm(range(nb_queries)):
+                gts = list(gt_targets.values())[i]
+                for seq in range(3):
+                    if seq==0:
+                        target_emb = torch.zeros((1, embedding_size)).to(chains[0][0].device)
+                    chain1_seq, chain2_seq, chain3_seq = seq_chains[seq]
+                    evidence1 = chain1_seq[0][i].view(1,-1) * chain1_seq[1][i].view(1,-1)
+                    evidence2 = chain2_seq[0][i].view(1,-1) * chain2_seq[1][i].view(1,-1)
+                    evidence3 = chain3_seq[0][i].view(1,-1) * chain3_seq[1][i].view(1,-1)
+                    evidence_mean = (evidence1 + evidence2 + evidence3) / 3
+                    target_emb = (1 /(cov_anchor + 3 * cov_target)) * ((cov_anchor)*target_emb + (3 * cov_target)*evidence_mean)
+                    cov_target = (cov_target * cov_anchor) /(cov_anchor + 3 * cov_target)
+                    rel_virtual = torch.ones_like(target_emb)
+                    ent_scores = self.forward_emb(target_emb, rel_virtual)
+                    scores[seq][i] = ent_scores.view(-1)
+
+        elif env.graph_type == '3_3_seq':
+            gt_targets = env.target_ids_hard
+            chains = env.chains
+            chain1 , chain2, chain3, chain4, chain5, chain6, chain7, chain8, chain9 = chains
+            nb_queries, embedding_size = chains[0][0].shape[0], chains[0][0].shape[1]
+
+            seq_chains = [[chain1, chain2, chain3], [chain4, chain5, chain6], [chain7, chain8, chain9]]
+            scores = torch.zeros((3, nb_queries, self.sizes[0])).to(chains[0][0].device)
+            for i in tqdm.tqdm(range(nb_queries)):
+                gts = list(gt_targets.values())[i]
+                for seq in range(3):
+                    if seq==0:
+                        target_emb = torch.zeros((1, embedding_size)).to(chains[0][0].device)
+                    chain1_seq, chain2_seq, chain3_seq = seq_chains[seq]
+                    lhs_1, rel_1, rhs_1 = chain1_seq
+                    lhs_1, rel_1 = lhs_1[i].view(1,-1), rel_1[i].view(1,-1)
+                    # z_scores is the scores of top candidates and rhs_3d is the embeddings of top candidates
+                    z_scores, rhs_3d = self.get_best_candidates(rel_1, lhs_1, None, candidates, last_step, None)
+                    rhs_2d_mean = torch.mean(rhs_3d[0], dim=0).view(1, embedding_size)
+                    rel_2 = (chain2_seq[1][i]).view(1, embedding_size)
+                    evidence1_mean = rhs_2d_mean * rel_2
+
+                    # for the second anchor
+                    lhs_3, rel_3, rhs_3 = chain3_seq
+                    lhs_3, rel_3 = lhs_3[i].view(1,-1), rel_3[i].view(1,-1)
+                    z_scores_3, rhs_3d_3 = self.get_best_candidates(rel_3, lhs_3, None, candidates, last_step, None)
+                    rhs_2d_mean_3 = torch.mean(rhs_3d_3[0], dim=0).view(1, embedding_size)
+                    evidence3_mean = rhs_2d_mean_3
+
+                    evidence_mean = (evidence1_mean + evidence3_mean) / 2
+                    cov_target = (cov_target * cov_anchor) /(cov_anchor + 2* candidates * cov_target)
+                    rel_virtual = torch.ones_like(target_emb)
+                    ent_scores = self.forward_emb(target_emb, rel_virtual)
+                    scores[seq][i] = ent_scores.view(-1)
+
+        elif env.graph_type == '4_3_seq':
+            gt_targets = env.target_ids_hard
+            chains = env.chains
+            new_env = copy.deepcopy(env)
+            new_env.chain_instructions = ['intersect_0_1']
+            chain1 , chain2, chain3, chain4, chain5, chain6, chain7, chain8, chain9 = chains
+            nb_queries, embedding_size = chains[0][0].shape[0], chains[0][0].shape[1]
+
+            seq_chains = [[chain1, chain2, chain3], [chain4, chain5, chain6], [chain7, chain8, chain9]]
+            scores = torch.zeros((3, nb_queries, self.sizes[0])).to(chains[0][0].device)
+            for i in tqdm.tqdm(range(nb_queries)):
+                gts = list(gt_targets.values())[i]
+                for seq in range(3):
+                    if seq==0:
+                        target_emb = torch.zeros((1, embedding_size)).to(chains[0][0].device)
+                    chain1_seq, chain2_seq, chain3_seq = seq_chains[seq]
+                    new_env.chains = [(chain1_seq[0][i].view(1,-1), chain1_seq[1][i].view(1,-1), chain1_seq[2][i].view(1,-1)), (chain2_seq[0][i].view(1,-1), chain2_seq[1][i].view(1,-1), chain2_seq[2][i].view(1,-1))]
+                    scores_var = self.query_answering_BF(new_env, candidates=candidates, t_norm=t_norm, batch_size=batch_size, scores_normalize=scores_normalize, explain=explain)
+                    _, top_var_indices = torch.topk(scores_var, candidates, dim=1)
+                    top_var_embeddings = self.ent_embeddings(top_var_indices[0])
+                    evidence_mean = (torch.mean(top_var_embeddings, dim=1).view(1, embedding_size)) * (chain3_seq[1][i].view(1, embedding_size))
+                    target_emb = (1 /(cov_anchor + candidates * cov_target)) * ((cov_anchor)*target_emb + (candidates * cov_target)*evidence_mean)
+                    cov_target = (cov_target * cov_anchor) /(cov_anchor + candidates * cov_target)
+                    rel_virtual = torch.ones_like(target_emb)
+                    ent_scores = self.forward_emb(target_emb, rel_virtual)
+                    scores[seq][i] = ent_scores.view(-1)
+
+                    
 
 
         return scores
@@ -2654,6 +2766,11 @@ class KBCModel(nn.Module, ABC):
             objective = self.t_norm
 
         chains, chain_instructions = env.chains, env.chain_instructions
+
+        if len(chain_instructions) == 6 and chain_instructions[0] == 'hop_0_1':
+            chain_instructions = ['hop_0_1', 'intersect_1_2', 'hop_3_4', 'intersect_4_5', 'hop_6_7', 'intersect_7_8']
+        elif len(chain_instructions) == 7 and chain_instructions[0] == 'intersect_0_1':
+            chain_instructions = ['intersect_0_1', 'hop_1_2', 'intersect_3_4', 'hop_4_5', 'intersect_6_7', 'hop_7_8']
         
         # chain_instructions = ['hop_0_1']
         # chains = [part1, part2]
@@ -2666,9 +2783,14 @@ class KBCModel(nn.Module, ABC):
         # data_loader = DataLoader(dataset=chains, batch_size=16, shuffle=False)
 
         batches = make_batches(nb_queries, batch_size)
+
+        seq_scores = []
+        seq_rhs_3d = []
+
         # batches = [(0,1), (1,2), (2,3), ...]
 
         for i, batch in enumerate(tqdm.tqdm(batches)):
+        #for i, batch in enumerate(batches):
             nb_branches = 1
             nb_ent = 0
             batch_scores = None
@@ -2681,6 +2803,7 @@ class KBCModel(nn.Module, ABC):
             if 'disj' in env.graph_type:
                 dnf_flag = True
             for inst_ind, inst in enumerate(chain_instructions):
+                #print("inst", inst)
                 with torch.no_grad():
                     # this if for the case of projection
                     if 'hop' in inst:
@@ -2697,13 +2820,23 @@ class KBCModel(nn.Module, ABC):
 
                         last_hop = False
                         for hop_num, ind in enumerate(indices):
+                            # if inst_ind ==2  and ind ==3:
+                            #     print(nb_branches)   # 25
+                            #     sys.exit()
+                            # we need to reset batch scores and nb_branches for beginning of hop in sequential setting
+                            if len(chain_instructions) ==6 and (inst_ind == 2 or inst_ind == 4):
+                                if ind ==3 or ind == 6:
+                                    nb_branches = 1
+                                batch_scores = None
 
-                            # print("HOP")
-                            # print(candidate_cache.keys())
                             last_step = (inst_ind == len(
                                 chain_instructions)-1) and last_hop
+                            if len(chain_instructions) == 6 and chain_instructions[0] == 'intersect_0_1':
+                                last_step = (ind == indices[-1]) and last_hop
 
                             lhs, rel, rhs = chains[ind]
+
+                            
 
                             # [a, p, X], [X, p, Y][Y, p, Z]
 
@@ -2712,15 +2845,17 @@ class KBCModel(nn.Module, ABC):
                                 lhs = lhs[batch[0]:batch[1]]
 
                             else:
-                                # print("MTA BRAT")
                                 batch_scores, lhs_3d = candidate_cache[f"lhs_{ind}"]
                                 lhs = lhs_3d.view(-1, embedding_size)
+
                             rel = rel[batch[0]:batch[1]]
                             rel = rel.view(-1, 1,
                                            embedding_size).repeat(1, nb_branches, 1)
                             rel = rel.view(-1, embedding_size)
+
+                            
                             if f"rhs_{ind}" not in candidate_cache:
-                                # gets best candidates for the rhs of this hop and the scores
+                                
                                 z_scores, rhs_3d = self.get_best_candidates(
                                     rel, lhs, None, candidates, last_step, env if explain else None)
                                 # z_scores : tensor of shape [Num_queries * Candidates^K]
@@ -2734,17 +2869,21 @@ class KBCModel(nn.Module, ABC):
                                 # B * S
                                 nb_sources = rhs_3d.shape[0]*rhs_3d.shape[1]
                                 nb_branches = nb_sources // batch_size
+
                                 # if the batch_score is None, we initialize it with the candidates scores (since there's just one hop). otherwise, the t-norm is applied
                                 if not last_step:
                                     batch_scores = z_scores_1d if batch_scores is None else objective(
                                         z_scores_1d, batch_scores.view(-1, 1).repeat(1, candidates).view(-1), t_norm)
+
                                 else:
                                     nb_ent = rhs_3d.shape[1]
+
                                     batch_scores = z_scores_1d if batch_scores is None else objective(
                                         z_scores_1d, batch_scores.view(-1, 1).repeat(1, nb_ent).view(-1), t_norm)
                                 # candidate_cache stores the scores and the candidate embeddings for each rhs
                                 candidate_cache[f"rhs_{ind}"] = (
                                     batch_scores, rhs_3d)
+                                
                                 if not last_hop:
                                     # candidate_cache of the rhs of this hop is the lhs of the next hop
                                     candidate_cache[f"lhs_{indices[hop_num+1]}"] = (
@@ -2761,6 +2900,17 @@ class KBCModel(nn.Module, ABC):
                                 continue
 
                             last_hop = True
+                            # chain type is 4_3
+                            if len(chain_instructions) == 6 and chain_instructions[0] == 'intersect_0_1' and last_step:
+                                seq_scores.append(batch_scores)
+                                seq_rhs_3d.append(rhs_3d)
+                                # TODO: resetting these params. Maybe do the same for 3_3
+
+                                if ind != 8:
+                                    nb_branches = 1
+                                    nb_ent = 0
+                                    batch_scores = None
+
                             del lhs, rel, rhs, rhs_3d, z_scores_1d, z_scores
                             # #torch.cuda.empty_cache()
 
@@ -2773,20 +2923,36 @@ class KBCModel(nn.Module, ABC):
                         if objective == self.t_norm and dnf_flag:
                             objective = self.t_conorm
 
-                        if len(inst.split("_")) > 3:
+                        if len(inst.split("_")) == 4:
                             ind_1 = int(inst.split("_")[-3])
                             ind_2 = int(inst.split("_")[-2])
                             ind_3 = int(inst.split("_")[-1])
 
                             indices = [ind_1, ind_2, ind_3]
+                        elif len(inst.split("_")) == 5:
+                            ind_1 = int(inst.split("_")[-4])
+                            ind_2 = int(inst.split("_")[-3])
+                            ind_3 = int(inst.split("_")[-2])
+                            ind_4 = int(inst.split("_")[-1])
+                            indices = [ind_1, ind_2, ind_3, ind_4]
+                        elif len(inst.split("_")) == 7:
+                            ind_1 = int(inst.split("_")[-6])
+                            ind_2 = int(inst.split("_")[-5])
+                            ind_3 = int(inst.split("_")[-4])
+                            ind_4 = int(inst.split("_")[-3])
+                            ind_5 = int(inst.split("_")[-2])
+                            ind_6 = int(inst.split("_")[-1])
+                            indices = [ind_1, ind_2, ind_3, ind_4, ind_5, ind_6]                        
+                        last_step_seq = False
 
                         for intersection_num, ind in enumerate(indices):
-                            # print("intersection")
-                            # print(candidate_cache.keys())
 
-                            # and ind == indices[0]
-                            last_step = (inst_ind == len(chain_instructions)-1)
+                            if len(chain_instructions) ==6:
+                                last_step = (inst_ind == len(chain_instructions)-1) or inst_ind % 2 == 1
+                            else:
+                                last_step = (inst_ind == len(chain_instructions)-1)
 
+                            
                             lhs, rel, rhs = chains[ind]
 
                             if lhs is not None:
@@ -2821,24 +2987,39 @@ class KBCModel(nn.Module, ABC):
 
                                 continue
 
-                            if f"rhs_{ind}" not in candidate_cache or last_step:
+                            if f"rhs_{ind}" not in candidate_cache or last_step or last_step_seq:
+
                                 z_scores, rhs_3d = self.get_best_candidates(
                                     rel, lhs, None, candidates, last_step, env if explain else None)
 
+
                                 # [B * Candidates^K] or [B, S-1, N]
                                 z_scores_1d = z_scores.view(-1)
-                                # print(z_scores_1d)
+
                                 if 'disj' in env.graph_type or scores_normalize:
                                     z_scores_1d = torch.sigmoid(z_scores_1d)
+                            
 
                                 if not last_step:
+                                    # 25
                                     nb_sources = rhs_3d.shape[0] * \
                                         rhs_3d.shape[1]
+                                    # 25
                                     nb_branches = nb_sources // batch_size
 
                                 if not last_step:
-                                    batch_scores = z_scores_1d if batch_scores is None else objective(
-                                        z_scores_1d, batch_scores.view(-1, 1).repeat(1, candidates).view(-1), t_norm)
+                                    # if len(chain_instructions) == 6 and (ind == indices[-1]):
+                                    #     batch_scores = z_scores_1d if batch_scores is None else objective(
+                                    #         z_scores_1d.view(-1, 1).repeat(1, candidates).view(-1), batch_scores.view(-1, 1).repeat(1, candidates).view(-1), t_norm)
+                                        
+                                        # if ind == 5:
+                                        #     batch_scores = objective(batch_scores, candidate_cache['rhs_2'][0], t_norm)
+                                        # if ind == 8:
+                                        #     batch_scores = objective(batch_scores, candidate_cache['rhs_5'][0], t_norm)
+
+                                    # else:
+                                        batch_scores = z_scores_1d if batch_scores is None else objective(
+                                            z_scores_1d, batch_scores.view(-1, 1).repeat(1, candidates).view(-1), t_norm)
                                 else:
                                     if ind == indices[0]:
                                         nb_ent = rhs_3d.shape[1]
@@ -2847,7 +3028,7 @@ class KBCModel(nn.Module, ABC):
 
                                     batch_scores = z_scores_1d if batch_scores is None else objective(
                                         z_scores_1d, batch_scores.view(-1, 1).repeat(1, nb_ent).view(-1), t_norm)
-                                    nb_ent = rhs_3d.shape[1]
+                                    nb_ent = rhs_3d.shape[1]                        
 
                                 candidate_cache[f"rhs_{ind}"] = (
                                     batch_scores, rhs_3d)
@@ -2861,23 +3042,45 @@ class KBCModel(nn.Module, ABC):
                                         iterator += 1
                                         count -= 1
 
-                                if ind == indices[-1]:
+                                if ind == indices[-1] and len(chain_instructions) != 6:
+                                    # in the seq mode, we don't want rhs candidates to be next lhss
                                     candidate_cache[f"lhs_{ind+1}"] = (
                                         batch_scores, rhs_3d)
+                                if ind == indices[-1] and len(chain_instructions) == 6 and chain_instructions[0] == 'intersect_0_1':
+                                    candidate_cache[f"lhs_{ind+1}"] = (batch_scores, rhs_3d)
+                                
+                                if ind == indices[-1] and len(chain_instructions) == 6 and chain_instructions[0] == 'hop_0_1':
+                                    seq_scores.append(batch_scores)
+                                    seq_rhs_3d.append(rhs_3d)
+                                    if ind == 8:
+                                        batch_scores = seq_scores[2]
                             else:
-                                batch_scores, rhs_3d = candidate_cache[f"rhs_{ind}"]
-                                candidate_cache[f"rhs_{ind+1}"] = (
-                                    batch_scores, rhs_3d)
+                                
 
+                                batch_scores, rhs_3d = candidate_cache[f"rhs_{ind}"]
+
+                                if f"rhs_{ind+1}" not in candidate_cache.keys():
+                                    candidate_cache[f"rhs_{ind+1}"] = (batch_scores, rhs_3d)
+                                        
                                 last_hop = True
+
+                                if len(chain_instructions) == 6 and (ind == indices[-2]):
+                                    last_step_seq = True
+
                                 del lhs, rel
+
                                 continue
 
+                            # if ind == 2:
+                            #     print(candidate_cache['rhs_2'][0].shape)
+                            #     sys.exit()
                             del lhs, rel, rhs, rhs_3d, z_scores_1d, z_scores
 
             if batch_scores is not None:
                 # [B * entites * S ]
                 # S ==  K**(V-1)
+                if len(chain_instructions) == 6:
+                    batch_scores = seq_scores[0] * seq_scores[1] * seq_scores[2]
 
                 scores_2d = batch_scores.view(batch_size, -1, nb_ent)
                 # print(scores_2d.shape)
