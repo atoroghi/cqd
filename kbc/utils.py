@@ -1447,7 +1447,7 @@ def preload_env(kbc_path, dataset, graph_type, mode="complete", kg_path=None,
             part2_heads_emb = torch.zeros(chain2[0].shape, device=device)
             part2_tails_emb = part1_tails_emb.clone()
 
-            #for part 3:
+            #for part 3 :
             part3_heads_emb = part1_tails_emb.clone()
             part3_tails_emb = torch.zeros(chain3[1].shape, device=device)
             for i in range(part3.shape[0]):
